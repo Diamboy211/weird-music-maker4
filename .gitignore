@@ -1,5 +1,6 @@
 *.swp
 frames
 *.o
+main
 *.dbs4
 !examples/*.dbs4
