@@ -6,4 +6,4 @@ a big rewrite of weird-music-maker3 (a project i never finished or publicly rele
 
 this project is linux-only
 
-if you have gcc, run `./build.sh` in the root of the repository. if not, change CC to your C compiler
+if you have gcc, run `./build.sh` in the root of the repository. if not, edit build.sh, and change `CC=gcc` to `CC=[your C compiler]`
