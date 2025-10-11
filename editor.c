@@ -372,6 +372,7 @@ static int editor_validate(Editor *editor)
 		if (status.done)
 		{
 			render_stop(editor->render_context);
+			editor->render_context = NULL;
 			editor->rendering = 0;
 		}
 		editor->drawn &= ~DRAWN_RENDER;
@@ -716,6 +717,16 @@ static int editor_inputs(Editor *editor)
 		editor->drawn = 0;
 		halfdelay(1);
 		return 0;
+	case 'R':
+		if (!editor->rendering) return 0;
+		editor_uncurses();
+		puts("stopping render thread...");
+		render_stop(editor->render_context);
+		editor_recurses();
+		editor->render_context = NULL;
+		editor->rendering = 0;
+		editor->drawn &= ~DRAWN_RENDER;
+		return 0;
 	case '#':
 		editor->accidental ^= 1;
 		editor->drawn &= ~DRAWN_INFO;
@@ -729,7 +740,7 @@ static int editor_inputs(Editor *editor)
 		puts("h j l | < v > | Home PgDn End");
 		puts("");
 		puts("?: display this help message");
-		puts("r/R: start/stop rendering");
+		puts("r: start rendering");
 		puts("z/Z: increment nibble by 1/4");
 		puts("x/X: decrement nibble by 1/4");
 		puts("#: toggle accidentals");

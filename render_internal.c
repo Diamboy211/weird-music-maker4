@@ -449,7 +449,7 @@ static uint8_t little_endian()
 	return *(uint8_t *)&n;
 }
 
-static int write_wav(const State *state, const RenderInput *input, RenderStatus *status)
+static uint8_t write_wav(const State *state, const RenderInput *input, RenderStatus *status)
 {
 	#define write_num(file, type, val) \
 	{ \
@@ -506,7 +506,7 @@ static int write_wav(const State *state, const RenderInput *input, RenderStatus 
 	return 0;
 err:
 	fclose(file);
-	return 1;
+	return RENDER_STATUS_ERR_AUDIO;
 }
 
 static int frame_filename_filter(const struct dirent *file)
@@ -826,18 +826,18 @@ static void render_frame_end(RenderFrameContext *rfc)
 	free(rfc);
 }
 
-static int write_ppms(const State *state, const RenderInput *input, RenderStatus *status)
+static uint8_t write_ppms(const State *state, const RenderInput *input, RenderStatus *status)
 {
 	if (mkdir(input->opt.frames_dir, 0777) && errno != EEXIST) return 1;
-	int err = 0;
+	uint8_t err = 0;
 	struct dirent **file_exist;
 	int file_exist_length = scandir(input->opt.frames_dir, &file_exist, frame_filename_filter, alphasort);
 	char filename[MAX_ARGS_LENGTH + 32];
-	if (file_exist_length == -1) err = 1;
+	if (file_exist_length == -1) err |= RENDER_STATUS_ERR_VIDEO;
 	else for (int i = 0; i < file_exist_length; i++)
 	{
 		sprintf(filename, "%s/%.30s", input->opt.frames_dir, file_exist[i]->d_name);
-		if (remove(filename)) err = 1;
+		if (remove(filename)) err |= RENDER_STATUS_ERR_VIDEO;
 		free(file_exist[i]);
 	}
 	free(file_exist);
@@ -854,19 +854,24 @@ static int write_ppms(const State *state, const RenderInput *input, RenderStatus
 		FILE *file = fopen(filename, "wb");
 		if (file == NULL)
 		{
-			err = 1;
+			err |= RENDER_STATUS_ERR_VIDEO;
 			continue;
 		}
 		if (fwrite(ppm_header, 1, ppm_header_size, file) < ppm_header_size)
 		{
-			err = 1;
+			err |= RENDER_STATUS_ERR_VIDEO;
 			fclose(file);
 			continue;
 		}
 		if (fwrite(img, 1, 3 * input->opt.width * input->opt.height, file) < 3 * input->opt.width * input->opt.height)
-			err = 1;
+			err |= RENDER_STATUS_ERR_VIDEO;
 		else status->frames_saved++;
 		fclose(file);
+		if (input->ctx->terminate != 0)
+		{
+			err |= RENDER_STATUS_ERR_EARLY;
+			break;
+		}
 	}
 	free(img);
 	render_frame_end(rfc);
@@ -875,6 +880,7 @@ static int write_ppms(const State *state, const RenderInput *input, RenderStatus
 
 typedef struct
 {
+	const volatile _Atomic uint8_t *terminate;
 	_Atomic uint64_t *sent;
 	uint64_t div;
 	uint64_t size;
@@ -900,6 +906,7 @@ static void *sender(void *arg)
 		}
 		sent += real_sent;
 		*(send.sent) = sent / send.div;
+		if (*send.terminate) break;
 	}
 	if (send.reuse == 0) close(send.fd);
 	return NULL;
@@ -946,6 +953,7 @@ static uint32_t write_ffmpeg(const State *state, const RenderInput *input, Rende
 		close(pipefd[0]);
 		wordfree(&ffmpeg_args);
 		SenderArgs send = {
+			&input->ctx->terminate,
 			&status->samples_saved,
 			sizeof(float),
 			sizeof(float) * state->samples.length,
@@ -954,10 +962,11 @@ static uint32_t write_ffmpeg(const State *state, const RenderInput *input, Rende
 			pipefd[1],
 			0
 		};
-		int err = sender(&send) ? RENDER_STATUS_ERR_AUDIO : 0;
+		uint8_t err = sender(&send) ? RENDER_STATUS_ERR_AUDIO : 0;
+		if (input->ctx->terminate != 0) err |= RENDER_STATUS_ERR_EARLY;
 		int wstatus;
 		waitpid(pid, &wstatus, 0);
-		if (!WIFEXITED(wstatus)) return RENDER_STATUS_ERR_AUDIO;
+		if (!WIFEXITED(wstatus)) return err | RENDER_STATUS_ERR_AUDIO;
 		return err;
 	}
 	int pipe_a[2], pipe_v[2];
@@ -1013,8 +1022,9 @@ static uint32_t write_ffmpeg(const State *state, const RenderInput *input, Rende
 	close(pipe_a[0]);
 	close(pipe_v[0]);
 	wordfree(&ffmpeg_args);
-	int err = 0;
+	uint8_t err = 0;
 	SenderArgs send_a = {
+		&input->ctx->terminate,
 		&status->samples_saved,
 		sizeof(float),
 		sizeof(float) * state->samples.length,
@@ -1052,6 +1062,7 @@ static uint32_t write_ffmpeg(const State *state, const RenderInput *input, Rende
 	}
 	_Atomic uint64_t trash;
 	SenderArgs send_v = {
+		&input->ctx->terminate,
 		&trash,
 		1,
 		3 * input->opt.width * input->opt.height,
@@ -1063,10 +1074,11 @@ static uint32_t write_ffmpeg(const State *state, const RenderInput *input, Rende
 	for (uint32_t i = 0; i < state->frames.length; i++)
 	{
 		render_frame(rfc, state, input, img, i);
-		if (i == state->frames.length - 1) send_v.reuse = 0;
 		if (sender(&send_v)) err |= RENDER_STATUS_ERR_VIDEO;
 		status->frames_saved++;
+		if (input->ctx->terminate != 0) break;
 	}
+	close(pipe_v[1]);
 	free(img);
 	render_frame_end(rfc);
 	if (!thread_err)
@@ -1075,25 +1087,22 @@ static uint32_t write_ffmpeg(const State *state, const RenderInput *input, Rende
 		pthread_join(thread_a, &r);
 		if (r) err |= RENDER_STATUS_ERR_AUDIO;
 	}
+	if (input->ctx->terminate != 0) err |= RENDER_STATUS_ERR_EARLY;
 	int wstatus;
 	waitpid(pid, &wstatus, 0);
-	if (!WIFEXITED(wstatus)) return RENDER_STATUS_ERR_AUDIO | RENDER_STATUS_ERR_VIDEO;
+	if (!WIFEXITED(wstatus)) return err | RENDER_STATUS_ERR_AUDIO | RENDER_STATUS_ERR_VIDEO;
 	return err;
 }
 
-static uint32_t output(const State *state, const RenderInput *input, RenderStatus *status)
+static uint8_t output(const State *state, const RenderInput *input, RenderStatus *status)
 {
-	uint32_t err = 0;
+	uint8_t err = 0;
 	if (!input->opt.use_ffmpeg)
 	{
 		if (input->opt.generate_audio)
-			if (write_wav(state, input, status))
-				err |= RENDER_STATUS_ERR_AUDIO;
+			err |= write_wav(state, input, status);
 		if (input->opt.generate_video)
-		{
-			if (write_ppms(state, input, status))
-				err |= RENDER_STATUS_ERR_VIDEO;
-		}
+			err |= write_ppms(state, input, status);
 		return err;
 	}
 	return write_ffmpeg(state, input, status);

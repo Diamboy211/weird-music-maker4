@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdatomic.h>
 #include <pthread.h>
 #include "render.h"
 
@@ -16,9 +17,8 @@ struct RenderContext
 {
 	RenderStatus status;
 	pthread_t thread_id;
-	uint32_t error;
 	uint8_t wait;
-	uint8_t terminate;
+	volatile _Atomic uint8_t terminate;
 };
 
 void render(RenderInput *input);
