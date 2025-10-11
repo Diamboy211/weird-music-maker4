@@ -1,0 +1,5 @@
+*.swp
+frames
+*.o
+*.dbs4
+!examples/*.dbs4
