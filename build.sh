@@ -1,6 +1,6 @@
 #!/bin/sh
 CC=gcc
-CFLAGS="-g -fanalyzer -Wall $(ncurses5-config --cflags)"
+CFLAGS="-O2 -Wall $(ncurses5-config --cflags)"
 LIBS="$(ncurses5-config --libs) -lm -pthread"
 
 ${CC} ${CFLAGS} -c dbs4.c
