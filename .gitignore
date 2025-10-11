@@ -3,4 +3,6 @@ frames
 *.o
 main
 *.dbs4
+*.wav
+*.mp4
 !examples/*.dbs4

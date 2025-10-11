@@ -458,9 +458,10 @@ static int write_wav(const State *state, const RenderInput *input, RenderStatus 
 	}
 	#define write_pun(file, type, type2, val) \
 	{ \
-		type2 tmp = (val); \
+		type tmp; \
+		memcpy(&tmp, &val, sizeof(type)); \
 		for (uint64_t i = 0; i < sizeof(type) * 8; i += 8) \
-			if (fputc((*(type *)&tmp) >> i, file) == EOF) goto err; \
+			if (fputc(tmp >> i, file) == EOF) goto err; \
 	}
 	#define write_str(file, val) \
 		if (fwrite(val, 1, strlen(val), file) < strlen(val)) goto err;
