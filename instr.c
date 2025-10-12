@@ -2,9 +2,11 @@
 #include <string.h>
 #include "helper.h"
 #include "instr.h"
+
 static const char *instrument_names[] = {
 	"sine", "square", "triangle", "sawtooth",
-	"fm", "white noise", "cubic sin", "hilbert-transformed triangle"
+	"fm", "white noise", "cubic sin", "hilbert-transformed triangle",
+	"nes triangle"
 };
 static const int instrument_amt = sizeof(instrument_names) / sizeof(*instrument_names);
 static const char *fx_names[] = {
@@ -73,6 +75,13 @@ static int cmd_03(char *s, int n, const Editor *editor, const uint8_t *c)
 	case 10: return snprintf(s, n, "change fm amplitude to %.4f", (1.0f / 4096.0f) * get_u16(c, 2));
 	case 11: return snprintf(s, n, "change square duty cycle to %.5f", (1.0f / 65536.0f) * get_u16(c, 2));
 	case 12: return snprintf(s, n, "change pitch bend to %+.3f cents", (100.0f / 65536.0f) * get_s16(c, 2));
+	case 13:
+	{
+		int16_t speed = get_s16(c, 2);
+		return snprintf(s, n, "change pitch slide to %+d %s/second", speed, speed == 1 || speed == -1 ? "cent" : "cents");
+	}
+	case 14: return snprintf(s, n, "change start phase to %.3f degrees", (360.0f / 65536.0f) * get_u16(c, 2));
+	case 15: return snprintf(s, n, "change lfo start phase to %.3f degrees", (360.0f / 65536.0f) * get_u16(c, 2));
 	default: return snprintf(s, n, "change setting 0x%02X to 0x%04X", get_u8(c, 1), get_u16(c, 2));
 	}
 }

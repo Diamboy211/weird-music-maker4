@@ -26,6 +26,7 @@ enum Instrument
 	INSTRUMENT_NOISE,
 	INSTRUMENT_CUBIC,
 	INSTRUMENT_HILBERT_TRI,
+	INSTRUMENT_NES_TRI,
 	INSTRUMENT_COUNT
 };
 
@@ -44,6 +45,9 @@ enum Setting
 	SETTING_FM_AMP,
 	SETTING_SQUARE_DUTY,
 	SETTING_PITCH_BEND,
+	SETTING_PITCH_SLIDE,
+	SETTING_START_PHASE,
+	SETTING_LFO_PHASE,
 	SETTING_COUNT
 };
 
@@ -109,7 +113,7 @@ static void state_init(State *state, uint32_t sample_rate, uint16_t fps, uint32_
 	state->current_us  = 0;
 	state->tick_length = 1000000;
 	static const uint16_t default_settings[SETTING_COUNT] = {
-		0, 0, 65535, 0, 65535, 0, 0, 0, 256, 0, 0, 32768, 0
+		0, 0, 65535, 0, 65535, 0, 0, 0, 256, 0, 0, 32768, 0, 0, 0, 0
 	};
 	static const uint16_t default_fxsettings[FXSETTING_COUNT] = {
 		4096, 4096, 4096, 4096, 4096, 4096
@@ -127,78 +131,92 @@ static void state_destroy(State *state)
 	vector_frame_destroy(&state->frames);
 }
 
-static float osc(State *state, float t)
+static double osc(State *state, double t)
 {
 	switch (state->settings[SETTING_INSTRUMENT])
 	{
 	case INSTRUMENT_SINE:
-		return sinf(2.0f * M_PI * t);
+		return sin(2.0 * M_PI * t);
 	case INSTRUMENT_SQUARE:
 	{
-		float duty = (1.0f / 65536.0f) * state->settings[SETTING_SQUARE_DUTY];
-		float dc = -1.0f + 2.0f * duty;
-		t -= (int)t;
-		return t < duty ? dc - 1.0f : dc + 1.0f;
+		double duty = (1.0 / 65536.0) * state->settings[SETTING_SQUARE_DUTY];
+		double dc = -1.0 + 2.0 * duty;
+		t -= floor(t);
+		return t < duty ? dc - 1.0 : dc + 1.0;
 	}
 	case INSTRUMENT_TRIANGLE:
-		t -= (int)t;
-		if (t < 0.25f) return t * 4.0f;
-		if (t < 0.75f) return 2.0f - t * 4.0f;
-		return t * 4.0f - 4.0f;
+		t -= floor(t);
+		if (t < 0.25) return t * 4.0;
+		if (t < 0.75) return 2.0 - t * 4.0;
+		return t * 4.0 - 4.0;
 	case INSTRUMENT_SAWTOOTH:
-		t -= (int)t;
-		return t * 2.0f - 1.0f;
+		t -= floor(t);
+		return t * 2.0 - 1.0;
 	case INSTRUMENT_FM:
 	{
-		float ratio = (1.0f / 4096.0f) * state->settings[SETTING_FM_RATIO];
-		float amp = (1.0f / 4096.0f) * state->settings[SETTING_FM_AMP];
-		if (ratio != 0.0f)
-			t += amp / (2.0f * M_PI * ratio) * cosf(2.0f * M_PI * ratio * t);
-		return sinf(2.0f * M_PI * t);
+		double ratio = (1.0 / 4096.0) * state->settings[SETTING_FM_RATIO];
+		double amp = (1.0 / 4096.0) * state->settings[SETTING_FM_AMP];
+		if (ratio != 0.0)
+			t += amp / (2.0 * M_PI * ratio) * cos(2.0 * M_PI * ratio * t);
+		return sin(2.0 * M_PI * t);
+	}
+	case INSTRUMENT_NOISE:
+	{
+		uint64_t x = t * 2.0;
+		x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9;
+		x = (x ^ (x >> 27)) * 0x94d049bb133111eb;
+		x = x ^ (x >> 31);
+		return (1.0f / (1ULL << 63)) * (double)(int64_t)x;
 	}
 	case INSTRUMENT_CUBIC:
 	{
-		static const float cubic_mul = 12.0f * sqrtf(3.0f);
-		t -= (int)t;
+		static const double cubic_mul = 12.0 * sqrt(3.0);
+		t -= floor(t);
 		return cubic_mul * t * (t - 0.5f) * (t - 1.0f);
 	}
 	case INSTRUMENT_HILBERT_TRI:
 	{
-		int it = t * 2.0f;
-		t -= 0.5f * it;
-		if (t > 0.25f) t = 0.5f - t;              // G is catalan's constant
-		static const float C1 = -0.368551627937f; // 8/pi * (1 - ln pi)
-		static const float C2 = 0.0825252536247f; // 8/pi * (48G/pi + 8 ln pi - 16 ln 2 - 12.03)
-		static const float C3 = -3.09337140887f;  // 8/pi * (-128G/pi - 16 ln pi + 32 ln 2 + 32.24)
-		static const float C4 = -1.22230996295f;  // 8/pi * -12/25
-		static const float M  = -2.54647908947f;  // -8/pi
-		float r = fmaf(t, C4, C3);
-		r = fmaf(r, t, C2);
-		r = fmaf(r, t, C1);
-		float s = t ? M * t * log(t) : 0.0f;
-		r = fmaf(r, t, s);
-		if (it % 2) r *= -1.0f;
+		int64_t it = floor(t * 2.0);
+		t -= 0.5 * it;
+		if (t > 0.25) t = 0.5 - t;                // G is catalan's constant
+		static const double C1 = -0.368551627937; // 8/pi * (1 - ln pi)
+		static const double C2 = 0.0825252536247; // 8/pi * (48G/pi + 8 ln pi - 16 ln 2 - 12.03)
+		static const double C3 = -3.09337140887;  // 8/pi * (-128G/pi - 16 ln pi + 32 ln 2 + 32.24)
+		static const double C4 = -1.22230996295;  // 8/pi * -12/25
+		static const double M  = -2.54647908947;  // -8/pi
+		double r = fma(t, C4, C3);
+		r = fma(r, t, C2);
+		r = fma(r, t, C1);
+		double s = t ? M * t * log(t) : 0.0;
+		r = fma(r, t, s);
+		if (it % 2) r *= -1.0;
 		return r;
 	}
-	case INSTRUMENT_NOISE:
+	case INSTRUMENT_NES_TRI:
 	{
-		uint64_t x = t * 2.0f;
-		x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9;
-		x = (x ^ (x >> 27)) * 0x94d049bb133111eb;
-		x = x ^ (x >> 31);
-		return (1.0f / (1ULL << 63)) * (float)(int64_t)x;
+		static const double NES_TRI_SAMPLES[32] = {
+			   1.0/15,   3.0/15,   5.0/15,  7.0/15,  9.0/15,  11.0/15,  13.0/15,  15.0/15,
+			  15.0/15,  13.0/15,  11.0/15,  9.0/15,  7.0/15,   5.0/15,   3.0/15,   1.0/15,
+			  -1.0/15,  -3.0/15,  -5.0/15, -7.0/15, -9.0/15, -11.0/15, -13.0/15, -15.0/15,
+			 -15.0/15, -13.0/15, -11.0/15, -9.0/15, -7.0/15,  -5.0/15,  -3.0/15,  -1.0/15,
+		};
+		int64_t ti = t * 32.0;
+		return NES_TRI_SAMPLES[ti & 31];
 	}
 	default:
-		return 0.0f;
+		return 0.0;
 	};
 }
 
 static IndexPair render_note(State *state, int8_t note, uint16_t ticks)
 {
-	float fnote = (float)note + (1.0f / 65536.0f) * (int16_t)state->settings[SETTING_PITCH_BEND];
-	float base_freq = 440.0f * powf(2.0, fnote / 12.0f);
-	float lfo_freq = (1.0f / 256.0f) * state->settings[SETTING_LFO_FREQ];
-	float lfo_amp = (1.0f / 65536.0f) * state->settings[SETTING_LFO_AMP];
+	double fnote = (double)note + (1.0 / 65536.0) * (int16_t)state->settings[SETTING_PITCH_BEND];
+	double base_freq   = 440.0 * pow(2.0, fnote / 12.0);
+	double start_phase = (1.0 / 65536.0) * state->settings[SETTING_START_PHASE];
+	double lfo_omega = (M_PI / 128.0) * state->settings[SETTING_LFO_FREQ];
+	double lfo_amp   = (1.0 / 65536.0) * state->settings[SETTING_LFO_AMP];
+	double lfo_phase = (M_PI / 32768.0) * state->settings[SETTING_LFO_PHASE];
+	double pitch_slide = (log(2.0) / 1200.0) * (int16_t)state->settings[SETTING_PITCH_SLIDE];
 	float instr_amp = (1.0f / 256.0f) * state->settings[SETTING_INSTRUMENT_VOL];
 
 	uint64_t start_time   = state->current_us;
@@ -235,10 +253,20 @@ static IndexPair render_note(State *state, int8_t note, uint16_t ticks)
 			float amp = (1.0f / 65536.0f) * state->settings[SETTING_ATTACK_AMP];
 			a = adsr_amp = amp * (i - start_sample) / (attack_sample - start_sample);
 		}
-		float t = (float)(i - start_sample) / state->sample_rate;
-		if (lfo_freq != 0.0f)
-			t += lfo_amp / (2.0f * M_PI * lfo_freq) * cosf(2.0f * M_PI * lfo_freq * t);
-		state->samples.data[i] += a * instr_amp * osc(state, base_freq * t);
+		double t = (double)(i - start_sample) / state->sample_rate;
+		double p = pitch_slide == 0.0 ? t : expm1(pitch_slide * t) / pitch_slide;
+		if (lfo_amp != 0.0)
+		{
+			double den = lfo_omega*lfo_omega + pitch_slide*pitch_slide;
+			if (den == 0.0) p += t * lfo_amp * sin(lfo_phase);
+			else
+			{
+				double wp = exp(pitch_slide * t) * cos(lfo_omega * t + lfo_phase) - cos(lfo_phase);
+				double lp = exp(pitch_slide * t) * sin(lfo_omega * t + lfo_phase) - sin(lfo_phase);
+				p += lfo_amp / den * (-lfo_omega * wp + pitch_slide * lp);
+			}
+		}
+		state->samples.data[i] += a * instr_amp * osc(state, fma(base_freq, p, start_phase));
 	}
 	return range;
 }
