@@ -13,6 +13,15 @@
 #include "map.h"
 #include "helper.h"
 
+double my_fma(double x, double y, double z)
+{
+#ifdef FP_FAST_FMA
+	return fma(x, y, z);
+#else
+	return x * y + z;
+#endif
+}
+
 define_vector(vector_u64, uint64_t);
 define_vector(vector_f, float);
 
@@ -184,11 +193,11 @@ static double osc(State *state, double t)
 		static const double C3 = -3.09337140887;  // 8/pi * (-128G/pi - 16 ln pi + 32 ln 2 + 32.24)
 		static const double C4 = -1.22230996295;  // 8/pi * -12/25
 		static const double M  = -2.54647908947;  // -8/pi
-		double r = fma(t, C4, C3);
-		r = fma(r, t, C2);
-		r = fma(r, t, C1);
+		double r = my_fma(t, C4, C3);
+		r = my_fma(r, t, C2);
+		r = my_fma(r, t, C1);
 		double s = t ? M * t * log(t) : 0.0;
-		r = fma(r, t, s);
+		r = my_fma(r, t, s);
 		if (it % 2) r *= -1.0;
 		return r;
 	}
@@ -266,7 +275,7 @@ static IndexPair render_note(State *state, int8_t note, uint16_t ticks)
 				p += lfo_amp / den * (-lfo_omega * wp + pitch_slide * lp);
 			}
 		}
-		state->samples.data[i] += a * instr_amp * osc(state, fma(base_freq, p, start_phase));
+		state->samples.data[i] += a * instr_amp * osc(state, my_fma(base_freq, p, start_phase));
 	}
 	return range;
 }
