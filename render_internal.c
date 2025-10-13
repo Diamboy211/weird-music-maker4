@@ -13,7 +13,7 @@
 #include "map.h"
 #include "helper.h"
 
-double my_fma(double x, double y, double z)
+static double my_fma(double x, double y, double z)
 {
 #ifdef FP_FAST_FMA
 	return fma(x, y, z);
@@ -352,7 +352,7 @@ enum StepError
 	STEP_MAX
 };
 
-IndexPair mark_frames(State *state, IndexPair range, uint32_t key)
+static IndexPair mark_frames(State *state, IndexPair range, uint32_t key)
 {
 	if (range.begin < range.end)
 	{
@@ -568,7 +568,7 @@ typedef struct
 	float instr_bright[];
 } RenderFrameContext;
 
-void rfc_get_frequency(RenderFrameContext *rfc)
+static void rfc_get_frequency(RenderFrameContext *rfc)
 {
 	float *ar = rfc->freq_real;
 	float *ai = rfc->freq_imag;
