@@ -36,6 +36,7 @@ enum Instrument
 	INSTRUMENT_CUBIC,
 	INSTRUMENT_HILBERT_TRI,
 	INSTRUMENT_NES_TRI,
+	INSTRUMENT_FILT_NOISE,
 	INSTRUMENT_COUNT
 };
 
@@ -57,6 +58,7 @@ enum Setting
 	SETTING_PITCH_SLIDE,
 	SETTING_START_PHASE,
 	SETTING_LFO_PHASE,
+	SETTING_FILT_NOISE_FLOOR,
 	SETTING_COUNT
 };
 
@@ -122,7 +124,7 @@ static void state_init(State *state, uint32_t sample_rate, uint16_t fps, uint32_
 	state->current_us  = 0;
 	state->tick_length = 1000000;
 	static const uint16_t default_settings[SETTING_COUNT] = {
-		0, 0, 65535, 0, 65535, 0, 0, 0, 256, 0, 0, 32768, 0, 0, 0, 0
+		0, 0, 65535, 0, 65535, 0, 0, 0, 256, 0, 0, 32768, 0, 0, 0, 0, 0
 	};
 	static const uint16_t default_fxsettings[FXSETTING_COUNT] = {
 		4096, 4096, 4096, 4096, 4096, 4096
@@ -138,6 +140,23 @@ static void state_destroy(State *state)
 	for (uint64_t i = 0; i < state->frames.length; i++)
 		map_u32_f_destroy(&state->frames.data[i].instr);
 	vector_frame_destroy(&state->frames);
+}
+
+static double hash(double t)
+{
+	uint64_t x = t;
+	x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9;
+	x = (x ^ (x >> 27)) * 0x94d049bb133111eb;
+	x = x ^ (x >> 31);
+	return (1.0f / (1ULL << 63)) * (double)(int64_t)x;
+}
+
+static double lanczos_kernel(double x, int r)
+{
+	if (x >= r) return 0.0;
+	if (x <= -r) return 0.0;
+	if (x == 0.0) return 1.0;
+	return r * sin(M_PI * x) * sin(M_PI * x / r) / (M_PI * M_PI * x * x);
 }
 
 static double osc(State *state, double t)
@@ -170,13 +189,7 @@ static double osc(State *state, double t)
 		return sin(2.0 * M_PI * t);
 	}
 	case INSTRUMENT_NOISE:
-	{
-		uint64_t x = t * 2.0;
-		x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9;
-		x = (x ^ (x >> 27)) * 0x94d049bb133111eb;
-		x = x ^ (x >> 31);
-		return (1.0f / (1ULL << 63)) * (double)(int64_t)x;
-	}
+		return hash(floor(t));
 	case INSTRUMENT_CUBIC:
 	{
 		static const double cubic_mul = 12.0 * sqrt(3.0);
@@ -211,6 +224,26 @@ static double osc(State *state, double t)
 		};
 		int64_t ti = t * 32.0;
 		return NES_TRI_SAMPLES[ti & 31];
+	}
+	case INSTRUMENT_FILT_NOISE:
+	{
+		static const int LANCZOS_RADIUS = 5;
+		double lp1 = 0.0f;
+		for (int i = -LANCZOS_RADIUS; i <= LANCZOS_RADIUS; i++)
+		{
+			double n = floor(t) + i;
+			lp1 += hash(n) * lanczos_kernel(n - t, LANCZOS_RADIUS);
+		}
+		double cut = (1.0 / 65536.0) * state->settings[SETTING_FILT_NOISE_FLOOR];
+		if (cut == 0.0) return lp1;
+		int new_r = ceil((double)LANCZOS_RADIUS / cut);
+		double lp2 = 0.0;
+		for (int i = -new_r; i <= new_r; i++)
+		{
+			double n = floor(t) + i;
+			lp2 += hash(n) * lanczos_kernel((n - t) * cut, LANCZOS_RADIUS);
+		}
+		return lp1 - cut * lp2;
 	}
 	default:
 		return 0.0;

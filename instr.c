@@ -6,7 +6,7 @@
 static const char *instrument_names[] = {
 	"sine", "square", "triangle", "sawtooth",
 	"fm", "white noise", "cubic sin", "hilbert-transformed triangle",
-	"nes triangle"
+	"nes triangle", "filtered white noise"
 };
 static const int instrument_amt = sizeof(instrument_names) / sizeof(*instrument_names);
 static const char *fx_names[] = {
@@ -82,6 +82,12 @@ static int cmd_03(char *s, int n, const Editor *editor, const uint8_t *c)
 	}
 	case 14: return snprintf(s, n, "change start phase to %.3f degrees", (360.0f / 65536.0f) * get_u16(c, 2));
 	case 15: return snprintf(s, n, "change lfo start phase to %.3f degrees", (360.0f / 65536.0f) * get_u16(c, 2));
+	case 16:
+	{
+		uint16_t cut = get_u16(c, 2);
+		if (cut == 0) return snprintf(s, n, "change filtered white noise to low-pass only");
+		return snprintf(s, n, "change filtered white noise high/low to %.5f", (1.0f / 65536.0f) * cut);
+	}
 	default: return snprintf(s, n, "change setting 0x%02X to 0x%04X", get_u8(c, 1), get_u16(c, 2));
 	}
 }
