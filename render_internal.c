@@ -155,7 +155,7 @@ static double lanczos_kernel(double x, int r)
 {
 	if (x >= r) return 0.0;
 	if (x <= -r) return 0.0;
-	if (x == 0.0) return 1.0;
+	if (x >= -6.0e-9 && x <= 6.0e-9) return 1.0;
 	return r * sin(M_PI * x) * sin(M_PI * x / r) / (M_PI * M_PI * x * x);
 }
 
@@ -228,7 +228,7 @@ static double osc(State *state, double t)
 	case INSTRUMENT_FILT_NOISE:
 	{
 		static const int LANCZOS_RADIUS = 5;
-		double lp1 = 0.0f;
+		double lp1 = 0.0;
 		for (int i = -LANCZOS_RADIUS; i <= LANCZOS_RADIUS; i++)
 		{
 			double n = floor(t) + i;
