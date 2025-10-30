@@ -157,6 +157,145 @@ static int cmd_09(char *s, int n, const Editor *editor, const uint8_t *c)
 		reg, cond_names[cond]);
 }
 
+static void get_label_name(char *s, const Editor *editor, uint32_t l)
+{
+	if (editor->label_mode == 0)
+	{
+		sprintf(s, "%u", l);
+		return;
+	}
+	static const char table[] = " abcdefghijklmnopqrstuvwxyz";
+	for (int i = 4; i >= 0; i--)
+	{
+		s[i] = table[l % 27];
+		l /= 27;
+	}
+	s[5] = 0;
+}
+
+static int cmd_10(char *s, int n, const Editor *editor, const uint8_t *c)
+{
+	uint32_t l = get_u24(c, 1);
+	char label[10];
+	get_label_name(label, editor, l);
+	return snprintf(s, n, "(%s):", label);
+}
+
+static int cmd_11(char *s, int n, const Editor *editor, const uint8_t *c)
+{
+	uint32_t packed = get_u24(c, 1);
+	uint8_t reg_note = packed & 0x3F;
+	uint8_t reg_ticks = (packed >> 6) & 0x3F;
+	uint16_t mult = packed >> 12;
+	return snprintf(s, n, "play note r%hhu for %hur%hhu ticks", reg_note, mult, reg_ticks);
+}
+
+static int cmd_12(char *s, int n, const Editor *editor, const uint8_t *c)
+{
+	uint32_t packed = get_u24(c, 1);
+	uint8_t reg_note = packed & 0x3F;
+	uint8_t reg_ticks = (packed >> 6) & 0x3F;
+	uint16_t mult = packed >> 12;
+	return snprintf(s, n, "play note r%hhu for %hur%hhu ticks without advancing", reg_note, mult, reg_ticks);
+}
+
+static int cmd_13(char *s, int n, const Editor *editor, const uint8_t *c)
+{
+	uint8_t setting = get_u8(c, 1);
+	uint16_t packed = get_u16(c, 2);
+	uint8_t reg = packed & 0x3F;
+	static const uint8_t sh_lut[] = { 4, 8, 12, 16 };
+	uint8_t sh = (packed >> 6) & 0x03;
+	int8_t div = (packed >> 8) & 0x3F;
+	uint8_t sat = (packed >> 14) & 0x01;
+	uint8_t sgn = packed >> 15;
+	int32_t map_a = 0;
+	int32_t map_b = 1 << sh_lut[sh];
+	if (sgn)
+	{
+		map_b >>= 1;
+		map_a = -map_b;
+	}
+	if (sat && sgn)
+		return snprintf(s, n, "change setting 0x%02X to clamped_map(r%hhu, %hhd, %hhd, %d, %d)", setting, reg, -div, div, map_a, map_b);
+	if (sat)
+		return snprintf(s, n, "change setting 0x%02X to clamped_map(r%hhu, 0, %hhd, %d, %d)", setting, reg, div, map_a, map_b);
+	if (sgn)
+		return snprintf(s, n, "change setting 0x%02X to map(r%hhu, %hhd, %hhd, %d, %d)", setting, reg, -div, div, map_a, map_b);
+	return snprintf(s, n, "change setting 0x%02X to map(r%hhu, 0, %hhd, %d, %d)", setting, reg, div, map_a, map_b);
+}
+
+static int cmd_14(char *s, int n, const Editor *editor, const uint8_t *c)
+{
+	uint32_t packed = get_u24(c, 1);
+	uint8_t reg = packed & 0x3F;
+	int32_t mult = packed >> 6;
+	if (mult >= 131072) mult -= 262144;
+	return snprintf(s, n, "seek by %dr%hhu", mult, reg);
+}
+
+static int cmd_15(char *s, int n, const Editor *editor, const uint8_t *c)
+{
+	uint8_t setting = get_u8(c, 1);
+	uint16_t packed = get_u16(c, 2);
+	uint8_t reg = packed & 0x3F;
+	static const uint8_t sh_lut[] = { 4, 8, 12, 16 };
+	uint8_t sh = (packed >> 6) & 0x03;
+	int8_t div = (packed >> 8) & 0x3F;
+	uint8_t sat = (packed >> 14) & 0x01;
+	uint8_t sgn = packed >> 15;
+	int32_t map_a = 0;
+	int32_t map_b = 1 << sh_lut[sh];
+	if (sgn)
+	{
+		map_b >>= 1;
+		map_a = -map_b;
+	}
+	if (sat && sgn)
+		return snprintf(s, n, "change fx setting 0x%02X to clamped_map(r%hhu, %hhd, %hhd, %d, %d)", setting, reg, -div, div, map_a, map_b);
+	if (sat)
+		return snprintf(s, n, "change fx setting 0x%02X to clamped_map(r%hhu, 0, %hhd, %d, %d)", setting, reg, div, map_a, map_b);
+	if (sgn)
+		return snprintf(s, n, "change fx setting 0x%02X to map(r%hhu, %hhd, %hhd, %d, %d)", setting, reg, -div, div, map_a, map_b);
+	return snprintf(s, n, "change fx setting 0x%02X to map(r%hhu, 0, %hhd, %d, %d)", setting, reg, div, map_a, map_b);
+}
+
+static int cmd_16(char *s, int n, const Editor *editor, const uint8_t *c)
+{
+	uint8_t fx = get_u8(c, 1);
+	uint16_t packed = get_u16(c, 2);
+	uint8_t reg_ticks = packed & 0x3F;
+	uint16_t mult = packed >> 6;
+	return snprintf(s, n, "apply %s for %hur%hhu ticks",
+		fx < fx_amt ? fx_names[fx] : "a non-existent fx", mult, reg_ticks);
+}
+
+static int cmd_17(char *s, int n, const Editor *editor, const uint8_t *c)
+{
+	uint8_t fx = get_u8(c, 1);
+	uint16_t packed = get_u16(c, 2);
+	uint8_t reg_ticks = packed & 0x3F;
+	uint16_t mult = packed >> 6;
+	return snprintf(s, n, "apply %s for %hur%hhu ticks without advancing",
+		fx < fx_amt ? fx_names[fx] : "a non-existent fx", mult, reg_ticks);
+}
+
+static int cmd_1e(char *s, int n, const Editor *editor, const uint8_t *c)
+{
+	uint32_t l = get_u24(c, 1);
+	char label[10];
+	get_label_name(label, editor, l);
+	return snprintf(s, n, "jump to (%s)", label);
+}
+
+static int cmd_1f(char *s, int n, const Editor *editor, const uint8_t *c)
+{
+	uint32_t l = get_u24(c, 1);
+	char label[10];
+	get_label_name(label, editor, l);
+	return snprintf(s, n, "call (%s)", label);
+}
+
 static int cmd_un(char *s, int n, const Editor *editor, const uint8_t *c)
 {
 	return snprintf(s, n, "unk cmd 0x%02X params 0x%02X 0x%02X 0x%02X",
@@ -165,14 +304,14 @@ static int cmd_un(char *s, int n, const Editor *editor, const uint8_t *c)
 
 static int cmd_ff(char *s, int n, const Editor *editor, const uint8_t *c)
 {
-	return snprintf(s, n, "exit");
+	return snprintf(s, n, "return");
 }
 
 static int (*cmd[256])(char *, int, const Editor *, const uint8_t *) = {
 /*00*/	cmd_00, cmd_01, cmd_02, cmd_03, cmd_04, cmd_05, cmd_06, cmd_07,
 	cmd_08, cmd_09, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un,
-/*10*/	cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un,
-	cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un,
+/*10*/	cmd_10, cmd_11, cmd_12, cmd_13, cmd_14, cmd_15, cmd_16, cmd_17,
+	cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_1e, cmd_1f,
 /*20*/	cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un,
 	cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un,
 /*30*/	cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un,

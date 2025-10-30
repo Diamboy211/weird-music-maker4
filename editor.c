@@ -453,6 +453,7 @@ static void editor_save(Editor *editor, uint8_t rename)
 	editor_recurses();
 	memcpy(editor->filename, filename, MAX_FILENAME_LENGTH+1);
 	editor->saved = 1;
+	editor->named_file = 1;
 }
 
 static void editor_load2(Editor *editor)
@@ -731,6 +732,10 @@ static int editor_inputs(Editor *editor)
 		editor->accidental ^= 1;
 		editor->drawn &= ~DRAWN_INFO;
 		return 0;
+	case '@':
+		editor->label_mode ^= 1;
+		editor->drawn &= ~DRAWN_INFO;
+		return 0;
 	case '?':
 		editor_uncurses();
 		puts("navigation:");
@@ -744,6 +749,7 @@ static int editor_inputs(Editor *editor)
 		puts("z/Z: increment nibble by 1/4");
 		puts("x/X: decrement nibble by 1/4");
 		puts("#: toggle accidentals");
+		puts("@: change label display mode");
 		puts("v: toggle visual mode");
 		puts("c/d: copy/cut current selection to internal clipboard");
 		puts("C: paste from internal clipboard");

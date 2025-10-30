@@ -31,6 +31,7 @@ typedef struct
 	uint8_t rendering;
 	uint8_t rendering_error;
 	uint8_t accidental;
+	uint8_t label_mode;
 } Editor;
 
 int editor_create(Editor *editor);

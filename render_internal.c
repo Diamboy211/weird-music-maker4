@@ -91,24 +91,44 @@ enum OP
 	OP_COUNT
 };
 
-define_map(map_u32_f, node_u32_f, uint32_t, float, 0);
+typedef union RGB
+{
+	struct { float r, g, b; };
+	float c[3];
+} RGB;
+
+typedef struct FrameInstr
+{
+	uint64_t ip;
+	RGB col;
+	int8_t note;
+} FrameInstr;
+
+define_vector(vector_fi, FrameInstr);
 
 typedef struct
 {
-	map_u32_f instr;
+	vector_fi instr;
 } Frame;
 
 define_vector(vector_frame, Frame);
+define_map(map_u32_u64, node_u32_u64, uint32_t, uint64_t, ~(uint64_t)0);
+
+#define CALL_STACK_MAX 16
 
 typedef struct
 {
-	uint32_t r[64];
+	int32_t r[64];
+	uint64_t call_stack[CALL_STACK_MAX];
 	vector_f samples;
 	vector_frame frames;
+	map_u32_u64 label_cache;
 	uint64_t current_us;
+	uint64_t label_saved;
 	uint32_t ip;
 	uint32_t sample_rate;
 	uint32_t tick_length;
+	uint32_t stack_ptr;
 	uint16_t settings[SETTING_COUNT];
 	uint16_t fxsettings[FXSETTING_COUNT];
 	uint16_t fps;
@@ -119,10 +139,13 @@ static void state_init(State *state, uint32_t sample_rate, uint16_t fps, uint32_
 	state->sample_rate = sample_rate;
 	state->samples     = vector_f_create((uint64_t)time_max * sample_rate);
 	state->frames      = vector_frame_create((uint64_t)time_max * fps);
+	state->label_cache = map_u32_u64_create();
 	state->fps         = fps;
 	state->ip          = 0;
 	state->current_us  = 0;
 	state->tick_length = 1000000;
+	state->label_saved = 0;
+	state->stack_ptr   = 0;
 	static const uint16_t default_settings[SETTING_COUNT] = {
 		0, 0, 65535, 0, 65535, 0, 0, 0, 256, 0, 0, 32768, 0, 0, 0, 0, 0
 	};
@@ -131,6 +154,7 @@ static void state_init(State *state, uint32_t sample_rate, uint16_t fps, uint32_
 	};
 	memcpy(state->settings, default_settings, sizeof(uint16_t) * SETTING_COUNT);
 	memcpy(state->fxsettings, default_fxsettings, sizeof(uint16_t) * FXSETTING_COUNT);
+	memset(state->call_stack, 0, sizeof(uint64_t) * CALL_STACK_MAX);
 	memset(state->r, 0, sizeof(uint32_t) * 64);
 }
 
@@ -138,8 +162,9 @@ static void state_destroy(State *state)
 {
 	vector_f_destroy(&state->samples);
 	for (uint64_t i = 0; i < state->frames.length; i++)
-		map_u32_f_destroy(&state->frames.data[i].instr);
+		vector_fi_destroy(&state->frames.data[i].instr);
 	vector_frame_destroy(&state->frames);
+	map_u32_u64_destroy(&state->label_cache);
 }
 
 static double hash(double t)
@@ -385,7 +410,7 @@ enum StepError
 	STEP_MAX
 };
 
-static IndexPair mark_frames(State *state, IndexPair range, uint32_t key)
+static IndexPair mark_frames(State *state, IndexPair range, uint32_t key, RGB color, int8_t note)
 {
 	if (range.begin < range.end)
 	{
@@ -394,43 +419,74 @@ static IndexPair mark_frames(State *state, IndexPair range, uint32_t key)
 		IndexPair f_range = vector_frame_ensure(&state->frames, (IndexPair){ frame_begin, frame_end });
 		for (uint64_t i = f_range.begin; i < f_range.end; i++)
 		{
-			float *times = map_u32_f_get(&state->frames.data[i].instr, state->ip);
-			if (times != NULL) *times += 1.0f;
+			if (state->frames.data[i].instr.data == NULL)
+				state->frames.data[i].instr = vector_fi_create(128);
+			uint64_t fi_begin = state->frames.data[i].instr.length;
+			uint64_t fi_end = fi_begin + state->stack_ptr + 1;
+			IndexPair fi_range = vector_fi_ensure(&state->frames.data[i].instr, (IndexPair){ fi_begin, fi_end });
+			for (uint64_t j = fi_range.begin; j < fi_range.end; j++)
+			{
+				uint64_t stk = j - fi_begin;
+				uint64_t ip = stk == state->stack_ptr ? key : state->call_stack[stk] - 1;
+				FrameInstr *fi = state->frames.data[i].instr.data + j;
+				fi->ip = ip;
+				fi->col = color;
+				fi->note = stk == 0 ? note : -128;
+			}
 		}
 		return f_range;
 	}
 	return (IndexPair){ 0, 0 };
 }
 
+static uint64_t prog_label_search(State *state, const uint8_t *prog, uint64_t prog_length, uint32_t label)
+{
+	uint64_t *node = map_u32_u64_get(&state->label_cache, label);
+	if (node == NULL) return ~(uint64_t)0;
+	if (*node + 1 != 0) return *node;
+	while (state->label_saved < prog_length)
+	{
+		const uint8_t *instr = prog + (state->label_saved++) * 4;
+		if (get_u8(instr, 0) != 0x10) continue;
+		uint32_t prog_label = get_u24(instr, 1);
+		uint64_t *nnode = map_u32_u64_get(&state->label_cache, prog_label);
+		if (nnode == NULL) return ~(uint64_t)0;
+		*nnode = state->label_saved;
+		if (prog_label == label) return state->label_saved;
+	}
+	return ~(uint64_t)0;
+}
+
 static enum StepError state_step(State *state, const uint8_t *prog, uint64_t prog_length)
 {
 	if (state->ip >= prog_length) return STEP_EOF;
 	const uint8_t *instr = prog + state->ip * 4;
+	static const RGB COL_NOTE = { .r=0.75, .g=0.25, .b=0.25 };
+	static const RGB COL_FX   = { .r=0.25, .g=0.75, .b=0.25 };
 	switch (instr[0])
 	{
-	case 0:
+	case 0x00:
 		state->tick_length = get_u24(instr, 1);
 		state->ip++;
 		return STEP_SUCCESS;
-	case 1:
+	case 0x01:
 	{
 		int8_t note = get_s8(instr, 1);
 		uint16_t ticks = get_u16(instr, 2);
-		mark_frames(state, render_note(state, note, ticks), state->ip);
+		mark_frames(state, render_note(state, note, ticks), state->ip, COL_NOTE, note);
 		state->current_us += state->tick_length * ticks;
 		state->ip++;
 		return STEP_SUCCESS;
-		break;
 	}
-	case 2:
+	case 0x02:
 	{
 		int8_t note = get_s8(instr, 1);
 		uint16_t ticks = get_u16(instr, 2);
-		mark_frames(state, render_note(state, note, ticks), state->ip);
+		mark_frames(state, render_note(state, note, ticks), state->ip, COL_NOTE, note);
 		state->ip++;
 		return STEP_SUCCESS;
 	}
-	case 3:
+	case 0x03:
 	{
 		uint8_t setting = get_u8(instr, 1);
 		if (setting < SETTING_COUNT)
@@ -438,7 +494,7 @@ static enum StepError state_step(State *state, const uint8_t *prog, uint64_t pro
 		state->ip++;
 		return STEP_SUCCESS;
 	}
-	case 4:
+	case 0x04:
 	{
 		state->current_us += (int64_t)get_s24(instr, 1) * state->tick_length;
 		if (state->current_us >= 0x8000000000000000ULL)
@@ -446,7 +502,7 @@ static enum StepError state_step(State *state, const uint8_t *prog, uint64_t pro
 		state->ip++;
 		return STEP_SUCCESS;
 	}
-	case 5:
+	case 0x05:
 	{
 		uint8_t fxsetting = get_u8(instr, 1);
 		if (fxsetting < FXSETTING_COUNT)
@@ -454,29 +510,29 @@ static enum StepError state_step(State *state, const uint8_t *prog, uint64_t pro
 		state->ip++;
 		return STEP_SUCCESS;
 	}
-	case 6:
+	case 0x06:
 	{
-		int8_t fx = get_s8(instr, 1);
+		uint8_t fx = get_u8(instr, 1);
 		uint16_t ticks = get_u16(instr, 2);
-		mark_frames(state, apply_fx(state, fx, ticks), state->ip);
+		mark_frames(state, apply_fx(state, fx, ticks), state->ip, COL_FX, -128);
 		state->current_us += state->tick_length * ticks;
 		state->ip++;
 		return STEP_SUCCESS;
 	}
-	case 7:
+	case 0x07:
 	{
 		int8_t fx = get_s8(instr, 1);
 		uint16_t ticks = get_u16(instr, 2);
-		mark_frames(state, apply_fx(state, fx, ticks), state->ip);
+		mark_frames(state, apply_fx(state, fx, ticks), state->ip, COL_FX, -128);
 		state->ip++;
 		return STEP_SUCCESS;
 	}
-	case 8:
+	case 0x08:
 	{
 		uint8_t op = get_u8(instr, 1);
 		uint8_t reg = op & 0x3F;
 		op >>= 6;
-		uint16_t val = get_s16(instr, 2);
+		int16_t val = get_s16(instr, 2);
 		switch (op)
 		{
 		case 0: state->r[reg]  = val; break;
@@ -487,7 +543,7 @@ static enum StepError state_step(State *state, const uint8_t *prog, uint64_t pro
 		state->ip++;
 		return STEP_SUCCESS;
 	}
-	case 9:
+	case 0x09:
 	{
 		uint8_t cond = get_u8(instr, 1);
 		uint8_t reg = cond & 0x3F;
@@ -506,8 +562,199 @@ static enum StepError state_step(State *state, const uint8_t *prog, uint64_t pro
 		else state->ip++;
 		return STEP_SUCCESS;
 	}
+	case 0x10:
+		state->ip++;
+		return STEP_SUCCESS;
+	case 0x11:
+	{
+		uint32_t packed = get_u24(instr, 1);
+		uint8_t reg_note = packed & 0x3F;
+		uint8_t reg_ticks = (packed >> 6) & 0x3F;
+		uint16_t mult = packed >> 12;
+
+		int8_t note = state->r[reg_note] & 0xFF;
+		int32_t ticks = state->r[reg_ticks] * mult;
+		if (ticks >= 0) mark_frames(state, render_note(state, note, ticks), state->ip, COL_NOTE, note);
+		state->current_us += state->tick_length * ticks;
+		state->ip++;
+		return STEP_SUCCESS;
+	}
+	case 0x12:
+	{
+		uint32_t packed = get_u24(instr, 1);
+		uint8_t reg_note = packed & 0x3F;
+		uint8_t reg_ticks = (packed >> 6) & 0x3F;
+		uint16_t mult = packed >> 12;
+
+		int8_t note = state->r[reg_note] & 0xFF;
+		int32_t ticks = state->r[reg_ticks] * mult;
+		if (ticks >= 0) mark_frames(state, render_note(state, note, ticks), state->ip, COL_NOTE, note);
+		state->ip++;
+		return STEP_SUCCESS;
+	}
+	case 0x13:
+	{
+		uint8_t setting = get_u8(instr, 1);
+		if (setting >= SETTING_COUNT)
+		{
+			state->ip++;
+			return STEP_SUCCESS;
+		}
+		uint16_t packed = get_u16(instr, 2);
+		uint8_t reg = packed & 0x3F;
+		static const uint8_t sh_lut[] = { 4, 8, 12, 16 };
+		uint8_t sh = (packed >> 6) & 0x03;
+		int8_t div = (packed >> 8) & 0x3F;
+		uint8_t sat = (packed >> 14) & 0x01;
+		uint8_t sgn = packed >> 15;
+		int32_t map_a = 0;
+		int32_t map_b = 1 << sh_lut[sh];
+		if (sgn)
+		{
+			map_b >>= 1;
+			map_a = -map_b;
+		}
+		int64_t val;
+		if (sat && div == 0)
+		{
+			if (state->r[reg] == 0) val = 0;
+			if (state->r[reg]  < 0) val = map_a;
+			if (state->r[reg]  > 0) val = map_b;
+		}
+		else if (!sat && sgn && div == 0)
+		{
+			if (state->r[reg] == 0) val = 0;
+			if (state->r[reg]  < 0) val = -32768;
+			if (state->r[reg]  > 0) val = 32767;
+		}
+		else if (!sat && !sgn && div == 0)
+		{
+			if (state->r[reg] <= 0) val = 0;
+			else val = 65535;
+		}
+		else if (sgn) val = ((int64_t)state->r[reg] << (sh_lut[sh] - 1)) / div;
+		else val = ((int64_t)state->r[reg] << sh_lut[sh]) / div;
+		if ( sat && val <  map_a) val =  map_a;
+		if ( sat && val >  map_b) val =  map_b;
+		if ( sgn && val < -32768) val = -32768;
+		if ( sgn && val >  32767) val =  32767;
+		if (!sgn && val <      0) val =      0;
+		if (!sgn && val >  65535) val =  65535;
+		state->settings[setting] = val;
+		state->ip++;
+		return STEP_SUCCESS;
+	}
+	case 0x14:
+	{
+		uint32_t packed = get_u24(instr, 1);
+		uint8_t reg = packed & 0x3F;
+		int64_t mult = packed >> 6;
+		if (mult >= 131072) mult -= 262144;
+		state->current_us += mult * state->r[reg] * state->tick_length;
+		if (state->current_us >= 0x8000000000000000ULL)
+			state->current_us = 0;
+		state->ip++;
+		return STEP_SUCCESS;
+	}
+	case 0x15:
+	{
+		uint8_t fxsetting = get_u8(instr, 1);
+		if (fxsetting >= FXSETTING_COUNT)
+		{
+			state->ip++;
+			return STEP_SUCCESS;
+		}
+		uint16_t packed = get_u16(instr, 2);
+		uint8_t reg = packed & 0x3F;
+		static const uint8_t sh_lut[] = { 4, 8, 12, 16 };
+		uint8_t sh = (packed >> 6) & 0x03;
+		int8_t div = (packed >> 8) & 0x3F;
+		uint8_t sat = (packed >> 14) & 0x01;
+		uint8_t sgn = packed >> 15;
+		int32_t map_a = 0;
+		int32_t map_b = 1 << sh_lut[sh];
+		if (sgn)
+		{
+			map_b >>= 1;
+			map_a = -map_b;
+		}
+		int64_t val;
+		if (sat && div == 0)
+		{
+			if (state->r[reg] == 0) val = 0;
+			if (state->r[reg]  < 0) val = map_a;
+			if (state->r[reg]  > 0) val = map_b;
+		}
+		else if (!sat && sgn && div == 0)
+		{
+			if (state->r[reg] == 0) val = 0;
+			if (state->r[reg]  < 0) val = -32768;
+			if (state->r[reg]  > 0) val = 32767;
+		}
+		else if (!sat && !sgn && div == 0)
+		{
+			if (state->r[reg] <= 0) val = 0;
+			else val = 65535;
+		}
+		else if (sgn) val = ((int64_t)state->r[reg] << (sh_lut[sh] - 1)) / div;
+		else val = ((int64_t)state->r[reg] << sh_lut[sh]) / div;
+		if ( sat && val <  map_a) val =  map_a;
+		if ( sat && val >  map_b) val =  map_b;
+		if ( sgn && val < -32768) val = -32768;
+		if ( sgn && val >  32767) val =  32767;
+		if (!sgn && val <      0) val =      0;
+		if (!sgn && val >  65535) val =  65535;
+		state->fxsettings[fxsetting] = val;
+		state->ip++;
+		return STEP_SUCCESS;
+	}
+	case 0x16:
+	{
+		uint8_t fx = get_u8(instr, 1);
+		uint16_t packed = get_u16(instr, 2);
+		uint8_t reg_ticks = packed & 0x3F;
+		uint16_t mult = packed >> 6;
+		int32_t ticks = state->r[reg_ticks] * mult;
+		if (ticks >= 0) mark_frames(state, apply_fx(state, fx, ticks), state->ip, COL_FX, -128);
+		state->current_us += state->tick_length * ticks;
+		state->ip++;
+		return STEP_SUCCESS;
+	}
+	case 0x17:
+	{
+		uint8_t fx = get_u8(instr, 1);
+		uint16_t packed = get_u16(instr, 2);
+		uint8_t reg_ticks = packed & 0x3F;
+		uint16_t mult = packed >> 6;
+		int32_t ticks = state->r[reg_ticks] * mult;
+		if (ticks >= 0) mark_frames(state, apply_fx(state, fx, ticks), state->ip, COL_FX, -128);
+		state->ip++;
+		return STEP_SUCCESS;
+	}
+	case 0x1E:
+	{
+		uint32_t label = get_u24(instr, 1);
+		uint64_t jmp = prog_label_search(state, prog, prog_length, label);
+		if (jmp + 1 == 0) return STEP_EOF;
+		state->ip = jmp;
+		return STEP_SUCCESS;
+	}
+	case 0x1F:
+	{
+		if (state->stack_ptr >= CALL_STACK_MAX) return STEP_EOF;
+		uint32_t label = get_u24(instr, 1);
+		uint64_t jmp = prog_label_search(state, prog, prog_length, label);
+		if (jmp + 1 == 0) return STEP_EOF;
+		state->call_stack[state->stack_ptr++] = state->ip + 1;
+		state->ip = jmp;
+		return STEP_SUCCESS;
+	}
 	case 0xFF:
-		return STEP_EXIT;
+	{
+		if (state->stack_ptr == 0) return STEP_EXIT;
+		state->ip = state->call_stack[--state->stack_ptr];
+		return STEP_SUCCESS;
+	}
 	default:
 		return STEP_UNK;
 	}
@@ -598,7 +845,7 @@ typedef struct
 
 	float twiddle[RFC_FREQ_BINS];
 	float window[RFC_FREQ_BINS];
-	float instr_bright[];
+	RGB instr_bright[];
 } RenderFrameContext;
 
 static void rfc_get_frequency(RenderFrameContext *rfc)
@@ -643,7 +890,7 @@ static void rfc_get_frequency(RenderFrameContext *rfc)
 
 static RenderFrameContext *render_frame_start(const State *state, const RenderInput *input, uint8_t *img)
 {
-	RenderFrameContext *rfc = malloc(sizeof(RenderFrameContext) + sizeof(float) * input->length);
+	RenderFrameContext *rfc = malloc(sizeof(RenderFrameContext) + sizeof(RGB) * input->length);
 	if (rfc == NULL) return NULL;
 	for (uint64_t i = 0; i < RFC_FREQ_BINS; i += 2)
 	{
@@ -658,7 +905,7 @@ static RenderFrameContext *render_frame_start(const State *state, const RenderIn
 	for (uint64_t i = 0; i < RFC_FREQ_BINS; i++)
 		rfc->freq_prev[i] = -80.0f;
 	for (uint64_t i = 0; i < input->length; i++)
-		rfc->instr_bright[i] = 0.0f;
+		rfc->instr_bright[i] = (RGB){};
 	return rfc;
 }
 
@@ -672,7 +919,7 @@ static void render_frame(RenderFrameContext *rfc, const State *state, const Rend
 	uint16_t split_y1 = 1;
 	uint16_t split_y2 = H >> 2;
 	uint16_t split_y3 = H - 1;
-	map_u32_f *executing_instrs = &state->frames.data[t].instr;
+	vector_fi *executing_instrs = &state->frames.data[t].instr;
 
 	memset(img, 32, 3*W*H);
 
@@ -822,14 +1069,22 @@ static void render_frame(RenderFrameContext *rfc, const State *state, const Rend
 	// highlight (instructions)
 	for (uint32_t i = 0; i < input->length; i++)
 	{
-		rfc->instr_bright[i] -= 12.0f / input->opt.fps;
-		if (rfc->instr_bright[i] < 0.0f) rfc->instr_bright[i] = 0.0f;
+		for (int j = 0; j < 3; j++)
+		{
+			rfc->instr_bright[i].c[j] -= 12.0f / input->opt.fps;
+			if (rfc->instr_bright[i].c[j] < 0.0f) rfc->instr_bright[i].c[j] = 0.0f;
+		}
 	}
-	for (node_u32_f *it = map_u32_f_begin(executing_instrs); it; it = map_u32_f_next(it))
-		rfc->instr_bright[it->key] = log2(pow(2.0f, rfc->instr_bright[it->key]) + it->value);
+	for (uint64_t i = 0; i < executing_instrs->length; i++)
+		for (int j = 0; j < 3; j++)
+			rfc->instr_bright[executing_instrs->data[i].ip].c[j] = log2(pow(2.0f, rfc->instr_bright[executing_instrs->data[i].ip].c[j]) + executing_instrs->data[i].col.c[j]);
 	float rect_dilate = fminf(W, H) * (1.0f / 80.0f);
 	for (uint32_t i = 0; i < input->length; i++)
-		if (rfc->instr_bright[i] > 0.125f / input->opt.fps)
+	{
+		int cond = 0;
+		for (int j = 0; j < 3; j++)
+			cond = cond || rfc->instr_bright[i].c[j] > 0.125f / input->opt.fps;
+		if (cond)
 		{
 			float fx1 = (float)split_x1;
 			float fx2 = (float)split_x2;
@@ -839,31 +1094,28 @@ static void render_frame(RenderFrameContext *rfc, const State *state, const Rend
 			float fy2 = (float)(split_y3 - split_y2) * (i+1) / input->length + split_y2;
 			int y1 = fmaxf(0, floorf(fy1 - rect_dilate));
 			int y2 = fminf(H, ceilf(fy2 + rect_dilate));
-			int cmd = get_u8(input->instr + i*4, 0);
-			int is_note = cmd == 1 || cmd == 2;
-			float colr = 208.0f;
-			float colg = is_note ? 208 : 60;
-			float colb = is_note ? 60 : 208;
+			float colr = 255.0f * rfc->instr_bright[i].c[0];
+			float colg = 255.0f * rfc->instr_bright[i].c[1];
+			float colb = 255.0f * rfc->instr_bright[i].c[2];
 			for (int y = y1; y < y2; y++)
 				for (int x = x1; x < x2; x++)
 				{
 					float xc = fmaxf(fx1, fminf(fx2, x));
 					float yc = fmaxf(fy1, fminf(fy2, y));
 					float d = hypotf(xc - x, yc - y);
-					float l = rfc->instr_bright[i] * fmaxf(0.0f, 1.0f - d / rect_dilate);
+					float l = fmaxf(0.0f, 1.0f - d / rect_dilate);
 					img[(y*W+x)*3] = fminf(255, colr * l + img[(y*W+x)*3]);
 					img[(y*W+x)*3+1] = fminf(255, colg * l + img[(y*W+x)*3+1]);
 					img[(y*W+x)*3+2] = fminf(255, colb * l + img[(y*W+x)*3+2]);
 				}
 		}
+	}
 	// highlight (piano)
 	const int8_t lowest_C = -9 - 12*4;
 	const float highlight_radius = (float)(split_x3 - split_x2) / (octaves*10);
-	for (node_u32_f *it = map_u32_f_begin(executing_instrs); it; it = map_u32_f_next(it))
+	for (uint64_t i = 0; i < executing_instrs->length; i++)
 	{
-		int cmd = get_u8(input->instr + it->key*4, 0);
-		if (cmd != 1 && cmd != 2) continue;
-		int8_t note = get_s8(input->instr + it->key*4, 1);
+		int8_t note = executing_instrs->data[i].note;
 		if (note < lowest_C || note >= lowest_C + octaves*12) continue;
 		int8_t note_rel = note - lowest_C;
 		int8_t octave = note_rel / 12;
