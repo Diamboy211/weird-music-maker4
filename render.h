@@ -25,7 +25,7 @@ typedef struct
 	uint32_t sample_rate;
 	uint32_t instructions_max;
 
-	uint32_t time_max;
+	uint32_t time_max, preroll_max;
 	uint16_t fps;
 	uint16_t width, height;
 

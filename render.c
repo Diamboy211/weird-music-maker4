@@ -222,6 +222,7 @@ int render_options_set(RenderOptions *opt)
 		{ write_option_u16,    change_option_u16,    "video width: ", &new_opt.width, "\n" },
 		{ write_option_u16,    change_option_u16,    "video height: ", &new_opt.height, "\n" },
 		{ write_option_u32,    change_option_u32,    "maximum duration: ", &new_opt.time_max, "s\n" },
+		{ write_option_u32,    change_option_u32,    "preroll: ", &new_opt.preroll_max, "s\n" },
 		{ write_option_u32,    change_option_u32,    "instruction execution limit: ", &new_opt.instructions_max, "\n" },
 		{ write_option_est,    change_r0,            "(read only) estimated disk space: ", &new_opt, "\n" },
 		{ write_option_string, change_r1,            "", "confirm", "\n" },

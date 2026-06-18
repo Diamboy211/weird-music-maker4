@@ -135,11 +135,11 @@ typedef struct
 	uint16_t fps;
 } State;
 
-static void state_init(State *state, uint32_t sample_rate, uint16_t fps, uint32_t time_max)
+static void state_init(State *state, uint32_t sample_rate, uint16_t fps, uint32_t preroll_max, uint32_t time_max)
 {
 	state->sample_rate = sample_rate;
-	state->samples     = vector_f_create(0, (uint64_t)time_max * sample_rate);
-	state->frames      = vector_frame_create(0, (uint64_t)time_max * fps);
+	state->samples     = vector_f_create(-(int64_t)preroll_max * sample_rate, (int64_t)time_max * sample_rate);
+	state->frames      = vector_frame_create(-(int64_t)preroll_max * fps, (int64_t)time_max * fps);
 	state->label_cache = map_u32_u64_create();
 	state->fps         = fps;
 	state->ip          = 0;
@@ -177,12 +177,15 @@ static double hash(double t)
 	return (1.0f / (1ULL << 63)) * (double)(int64_t)x;
 }
 
-static double lanczos_kernel(double x, int r)
+static double conv_kernel(double x, int r)
 {
 	if (x >= r) return 0.0;
 	if (x <= -r) return 0.0;
 	if (x >= -6.0e-9 && x <= 6.0e-9) return 1.0;
-	return r * sin(M_PI * x) * sin(M_PI * x / r) / (M_PI * M_PI * x * x);
+	double p1 = M_PI * x, p1r = p1 / r, p2r = p1r + p1r, p3r = p2r + p1r;
+	double sinc = sin(p1) / p1;
+	double window = 0.355768 + 0.487396 * cos(p1r) + 0.144232 * cos(p2r) + 0.012604 * cos(p3r);
+	return sinc * window;
 }
 
 static double osc(State *state, double t)
@@ -253,21 +256,22 @@ static double osc(State *state, double t)
 	}
 	case INSTRUMENT_FILT_NOISE:
 	{
-		static const int LANCZOS_RADIUS = 5;
+		double t2 = t + t;
+		static const int CONV_RADIUS = 12;
 		double lp1 = 0.0;
-		for (int i = -LANCZOS_RADIUS; i <= LANCZOS_RADIUS; i++)
+		for (int i = -CONV_RADIUS; i <= CONV_RADIUS; i++)
 		{
-			double n = floor(t) + i;
-			lp1 += hash(n) * lanczos_kernel(n - t, LANCZOS_RADIUS);
+			double n = floor(t2) + i;
+			lp1 += hash(n) * conv_kernel(n - t2, CONV_RADIUS);
 		}
 		double cut = (1.0 / 65536.0) * state->settings[SETTING_FILT_NOISE_FLOOR];
 		if (cut == 0.0) return lp1;
-		int new_r = ceil((double)LANCZOS_RADIUS / cut);
+		int new_r = ceil((double)CONV_RADIUS / cut);
 		double lp2 = 0.0;
 		for (int i = -new_r; i <= new_r; i++)
 		{
-			double n = floor(t) + i;
-			lp2 += hash(n) * lanczos_kernel((n - t) * cut, LANCZOS_RADIUS);
+			double n = floor(t2) + i;
+			lp2 += hash(n) * conv_kernel((n - t2) * cut, CONV_RADIUS);
 		}
 		return lp1 - cut * lp2;
 	}
@@ -1446,7 +1450,7 @@ static uint8_t output(const State *state, const RenderInput *input, RenderStatus
 void render(RenderInput *input)
 {
 	State state;
-	state_init(&state, input->opt.sample_rate, input->opt.fps, input->opt.time_max);
+	state_init(&state, input->opt.sample_rate, input->opt.fps, input->opt.preroll_max, input->opt.time_max);
 	memset(&input->ctx->status, 0, sizeof(RenderStatus));
 
 	enum StepError step_err = STEP_SUCCESS;
