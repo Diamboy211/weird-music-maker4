@@ -10,4 +10,4 @@ ${CC} ${CFLAGS} -c instr.c
 ${CC} ${CFLAGS} -c render.c
 ${CC} ${CFLAGS} -c render_internal.c
 ${CC} ${CFLAGS} -c helper.c
-${CC} ${CFLAGS} -o main dbs4.o list.o editor.o instr.o render.o render_internal.o helper.o $LIBS
+${CC} ${CFLAGS} -o main dbs4.o list.o editor.o instr.o render.o render_internal.o helper.o ${LIBS}

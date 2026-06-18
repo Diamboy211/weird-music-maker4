@@ -982,8 +982,9 @@ static void render_frame(RenderFrameContext *rfc, const State *state, const Rend
 	// visualizer
 	const float MIN_FREQ = 20.0f;
 	const float MAX_FREQ = 8000.0f;
-	const uint64_t MIN_FREQ_BIN = ceilf((float)RFC_FREQ_BINS * MIN_FREQ / input->opt.sample_rate);
-	const uint64_t MAX_FREQ_BIN = floorf((float)RFC_FREQ_BINS * MAX_FREQ / input->opt.sample_rate);
+	uint64_t MIN_FREQ_BIN = ceilf((float)RFC_FREQ_BINS * MIN_FREQ / input->opt.sample_rate);
+	uint64_t MAX_FREQ_BIN = floorf((float)RFC_FREQ_BINS * MAX_FREQ / input->opt.sample_rate);
+	if (MAX_FREQ_BIN >= RFC_FREQ_BINS) MAX_FREQ_BIN = RFC_FREQ_BINS - 1;
 	int64_t samples_end = (int64_t)(t + 1) * input->opt.sample_rate / input->opt.fps;
 	int64_t samples_begin = samples_end - RFC_FREQ_BINS;
 	int64_t endpoint_2 = samples_end;
@@ -1007,6 +1008,7 @@ static void render_frame(RenderFrameContext *rfc, const State *state, const Rend
 		float x2 = (float)(x+3 - split_x2) * (MAX_FREQ_BIN - MIN_FREQ_BIN) / (split_x3 - split_x2 + 2) + MIN_FREQ_BIN;
 		uint64_t rx1 = floorf(x1);
 		uint64_t rx2 = ceilf(x2);
+		if (rx2 > RFC_FREQ_BINS) rx2 = RFC_FREQ_BINS;
 		for (uint64_t i = rx1; i < rx2; i++)
 			s += rfc->freq_prev[i] * (1.0f - fabsf(fmaxf(x1, fminf(x2, i)) - i));
 		s /= x2 - x1;
