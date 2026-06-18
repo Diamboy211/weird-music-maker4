@@ -34,6 +34,7 @@ static void get_note(char *s, const Editor *editor, int8_t note)
 
 static int cmd_00(char *s, int n, const Editor *editor, const uint8_t *c)
 {
+	(void)editor;
 	return snprintf(s, n, "set tick length to %uus", get_u24(c, 1));
 }
 
@@ -55,6 +56,7 @@ static int cmd_02(char *s, int n, const Editor *editor, const uint8_t *c)
 
 static int cmd_03(char *s, int n, const Editor *editor, const uint8_t *c)
 {
+	(void)editor;
 	switch (get_u8(c, 1))
 	{
 	case 0:
@@ -94,6 +96,7 @@ static int cmd_03(char *s, int n, const Editor *editor, const uint8_t *c)
 
 static int cmd_04(char *s, int n, const Editor *editor, const uint8_t *c)
 {
+	(void)editor;
 	int32_t dt = get_s24(c, 1);
 	int32_t t = dt < 0 ? -dt : dt;
 	return snprintf(s, n, "%s by %d %s", dt < 0 ? "rewind" : "seek", t, t != 1 ? "ticks" : "tick");
@@ -101,6 +104,7 @@ static int cmd_04(char *s, int n, const Editor *editor, const uint8_t *c)
 
 static int cmd_05(char *s, int n, const Editor *editor, const uint8_t *c)
 {
+	(void)editor;
 	switch (get_u8(c, 1))
 	{
 	case 0: return snprintf(s, n, "change linear fade start amplitude to %.4f", (1.0f / 4096.0f) * get_u16(c, 2));
@@ -115,6 +119,7 @@ static int cmd_05(char *s, int n, const Editor *editor, const uint8_t *c)
 
 static int cmd_06(char *s, int n, const Editor *editor, const uint8_t *c)
 {
+	(void)editor;
 	uint8_t fx = get_u8(c, 1);
 	uint16_t ticks = get_u16(c, 2);
 	return snprintf(s, n, "apply %s for %d %s",
@@ -123,6 +128,7 @@ static int cmd_06(char *s, int n, const Editor *editor, const uint8_t *c)
 
 static int cmd_07(char *s, int n, const Editor *editor, const uint8_t *c)
 {
+	(void)editor;
 	uint8_t fx = get_u8(c, 1);
 	uint16_t ticks = get_u16(c, 2);
 	return snprintf(s, n, "apply %s for %d %s without advancing",
@@ -131,6 +137,7 @@ static int cmd_07(char *s, int n, const Editor *editor, const uint8_t *c)
 
 static int cmd_08(char *s, int n, const Editor *editor, const uint8_t *c)
 {
+	(void)editor;
 	static const char *op_names[4] = {
 		"=", "+=", "-=", "*="
 	};
@@ -142,6 +149,7 @@ static int cmd_08(char *s, int n, const Editor *editor, const uint8_t *c)
 
 static int cmd_09(char *s, int n, const Editor *editor, const uint8_t *c)
 {
+	(void)editor;
 	static const char *cond_names[4] = {
 		"is zero", "is not zero", "is positive", "is negative"
 	};
@@ -183,6 +191,7 @@ static int cmd_10(char *s, int n, const Editor *editor, const uint8_t *c)
 
 static int cmd_11(char *s, int n, const Editor *editor, const uint8_t *c)
 {
+	(void)editor;
 	uint32_t packed = get_u24(c, 1);
 	uint8_t reg_note = packed & 0x3F;
 	uint8_t reg_ticks = (packed >> 6) & 0x3F;
@@ -192,6 +201,7 @@ static int cmd_11(char *s, int n, const Editor *editor, const uint8_t *c)
 
 static int cmd_12(char *s, int n, const Editor *editor, const uint8_t *c)
 {
+	(void)editor;
 	uint32_t packed = get_u24(c, 1);
 	uint8_t reg_note = packed & 0x3F;
 	uint8_t reg_ticks = (packed >> 6) & 0x3F;
@@ -201,6 +211,7 @@ static int cmd_12(char *s, int n, const Editor *editor, const uint8_t *c)
 
 static int cmd_13(char *s, int n, const Editor *editor, const uint8_t *c)
 {
+	(void)editor;
 	uint8_t setting = get_u8(c, 1);
 	uint16_t packed = get_u16(c, 2);
 	uint8_t reg = packed & 0x3F;
@@ -227,6 +238,7 @@ static int cmd_13(char *s, int n, const Editor *editor, const uint8_t *c)
 
 static int cmd_14(char *s, int n, const Editor *editor, const uint8_t *c)
 {
+	(void)editor;
 	uint32_t packed = get_u24(c, 1);
 	uint8_t reg = packed & 0x3F;
 	int32_t mult = packed >> 6;
@@ -236,6 +248,7 @@ static int cmd_14(char *s, int n, const Editor *editor, const uint8_t *c)
 
 static int cmd_15(char *s, int n, const Editor *editor, const uint8_t *c)
 {
+	(void)editor;
 	uint8_t setting = get_u8(c, 1);
 	uint16_t packed = get_u16(c, 2);
 	uint8_t reg = packed & 0x3F;
@@ -262,6 +275,7 @@ static int cmd_15(char *s, int n, const Editor *editor, const uint8_t *c)
 
 static int cmd_16(char *s, int n, const Editor *editor, const uint8_t *c)
 {
+	(void)editor;
 	uint8_t fx = get_u8(c, 1);
 	uint16_t packed = get_u16(c, 2);
 	uint8_t reg_ticks = packed & 0x3F;
@@ -272,6 +286,7 @@ static int cmd_16(char *s, int n, const Editor *editor, const uint8_t *c)
 
 static int cmd_17(char *s, int n, const Editor *editor, const uint8_t *c)
 {
+	(void)editor;
 	uint8_t fx = get_u8(c, 1);
 	uint16_t packed = get_u16(c, 2);
 	uint8_t reg_ticks = packed & 0x3F;
@@ -298,12 +313,15 @@ static int cmd_1f(char *s, int n, const Editor *editor, const uint8_t *c)
 
 static int cmd_un(char *s, int n, const Editor *editor, const uint8_t *c)
 {
+	(void)editor;
 	return snprintf(s, n, "unk cmd 0x%02X params 0x%02X 0x%02X 0x%02X",
 		get_u8(c, 0), get_u8(c, 1), get_u8(c, 2), get_u8(c, 3));
 }
 
 static int cmd_ff(char *s, int n, const Editor *editor, const uint8_t *c)
 {
+	(void)editor;
+	(void)c;
 	return snprintf(s, n, "return");
 }
 

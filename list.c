@@ -102,7 +102,7 @@ void list_destroy(List *list)
 
 void list_swap(List *list1, List *list2)
 {
-	uint64_t tl = list1->length;
+	int tl = list1->length;
 	list1->length = list2->length;
 	list2->length = tl;
 	ListNode *tp = list1->front;

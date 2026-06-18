@@ -1,7 +1,7 @@
 #!/bin/sh
 CC=gcc
-CFLAGS="-O2 -Wall $(ncurses5-config --cflags)"
-LIBS="$(ncurses5-config --libs) -lm -pthread"
+CFLAGS="-g -Wall -Wextra -pedantic -std=gnu11 -fsanitize=address,undefined -fno-omit-frame-pointer $(ncurses6-config --cflags)"
+LIBS="$(ncurses6-config --libs) -lm -pthread"
 
 ${CC} ${CFLAGS} -c dbs4.c
 ${CC} ${CFLAGS} -c list.c

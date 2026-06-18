@@ -21,6 +21,7 @@ int editor_create(Editor *editor)
 
 int editor_init_display(Editor *editor)
 {
+	(void)editor;
 	setlocale(LC_CTYPE, "");
 	initscr();
 	halfdelay(1);
@@ -329,6 +330,8 @@ static int editor_validate(Editor *editor)
 		if (editor->render) delwin(editor->render);
 		int x1 = 14;
 		int x2 = w/2 + 7;
+		int xr = w - 28;
+		if (x2 < xr) x2 = xr;
 		editor->hex      = newwin(h-1,    x1,   0,  0);
 		editor->info     = newwin(h-1, x2-x1,   0, x1);
 		editor->footer   = newwin(  0,     0, h-1,  0);
@@ -778,6 +781,7 @@ int editor_destroy(Editor *editor)
 	if (editor->footer) delwin(editor->footer);
 	if (editor->render) delwin(editor->render);
 	list_destroy(&editor->data);
+	list_destroy(&editor->clipboard);
 	endwin();
 	return 0;
 }

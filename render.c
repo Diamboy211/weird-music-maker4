@@ -61,8 +61,8 @@ static void write_option_bool(const char *prefix, const void *value, const char 
 	addstr(suffix); \
 }
 
-def_wo(PRIu16, uint16_t, u16);
-def_wo(PRIu32, uint32_t, u32);
+def_wo(PRIu16, uint16_t, u16)
+def_wo(PRIu32, uint32_t, u32)
 
 static void write_option_string(const char *prefix, const void *value, const char *suffix, uint8_t highlight)
 {
@@ -145,8 +145,8 @@ static int change_option_bool(RenderOptions *opt, void *data)
 	return 0; \
 }
 
-def_co(PRIu16, SCNu16, uint16_t, u16);
-def_co(PRIu32, SCNu32, uint32_t, u32);
+def_co(PRIu16, SCNu16, uint16_t, u16)
+def_co(PRIu32, SCNu32, uint32_t, u32)
 
 static int change_option_string(RenderOptions *opt, void *data)
 {
@@ -288,7 +288,7 @@ RenderContext *render_start(const List *data, const RenderOptions *opt)
 		return NULL;
 	}
 	ListNode *it = data->front;
-	for (uint64_t i = 0; i < data->length * 4; i += 4)
+	for (uint64_t i = 0; i < (uint64_t)data->length * 4; i += 4)
 	{
 		memcpy(input->instr+i, it->e, 4);
 		it = it->next;

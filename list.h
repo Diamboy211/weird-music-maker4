@@ -10,8 +10,8 @@ typedef struct ListNode
 
 typedef struct
 {
-	uint64_t length;
 	ListNode *front, *back;
+	int length;
 } List;
 
 void list_create(List *list);

@@ -9,6 +9,7 @@
 #include <wordexp.h>
 #include <math.h>
 #include "render_internal.h"
+#include "simple_vector.h"
 #include "vector.h"
 #include "map.h"
 #include "helper.h"
@@ -22,8 +23,8 @@ static double my_fma(double x, double y, double z)
 #endif
 }
 
-define_vector(vector_u64, uint64_t);
-define_vector(vector_f, float);
+define_vector(vector_u64, uint64_t, 0)
+define_vector(vector_f, float, 0)
 
 enum Instrument
 {
@@ -104,15 +105,15 @@ typedef struct FrameInstr
 	int8_t note;
 } FrameInstr;
 
-define_vector(vector_fi, FrameInstr);
+define_simple_vector(vector_simple_fi, FrameInstr)
 
 typedef struct
 {
-	vector_fi instr;
+	vector_simple_fi instr;
 } Frame;
 
-define_vector(vector_frame, Frame);
-define_map(map_u32_u64, node_u32_u64, uint32_t, uint64_t, ~(uint64_t)0);
+define_vector(vector_frame, Frame, (Frame){vector_simple_fi_create(128)})
+define_map(map_u32_u64, node_u32_u64, uint32_t, uint64_t, ~(uint64_t)0)
 
 #define CALL_STACK_MAX 16
 
@@ -123,7 +124,7 @@ typedef struct
 	vector_f samples;
 	vector_frame frames;
 	map_u32_u64 label_cache;
-	uint64_t current_us;
+	int64_t current_us;
 	uint64_t label_saved;
 	uint32_t ip;
 	uint32_t sample_rate;
@@ -137,8 +138,8 @@ typedef struct
 static void state_init(State *state, uint32_t sample_rate, uint16_t fps, uint32_t time_max)
 {
 	state->sample_rate = sample_rate;
-	state->samples     = vector_f_create((uint64_t)time_max * sample_rate);
-	state->frames      = vector_frame_create((uint64_t)time_max * fps);
+	state->samples     = vector_f_create(0, (uint64_t)time_max * sample_rate);
+	state->frames      = vector_frame_create(0, (uint64_t)time_max * fps);
 	state->label_cache = map_u32_u64_create();
 	state->fps         = fps;
 	state->ip          = 0;
@@ -161,8 +162,8 @@ static void state_init(State *state, uint32_t sample_rate, uint16_t fps, uint32_
 static void state_destroy(State *state)
 {
 	vector_f_destroy(&state->samples);
-	for (uint64_t i = 0; i < state->frames.length; i++)
-		vector_fi_destroy(&state->frames.data[i].instr);
+	for (int64_t i = state->frames.begin; i < state->frames.end; i++)
+		vector_simple_fi_destroy(&vector_at(&state->frames, i).instr);
 	vector_frame_destroy(&state->frames);
 	map_u32_u64_destroy(&state->label_cache);
 }
@@ -217,7 +218,7 @@ static double osc(State *state, double t)
 		return hash(floor(t));
 	case INSTRUMENT_CUBIC:
 	{
-		static const double cubic_mul = 12.0 * sqrt(3.0);
+		static const double cubic_mul = 20.784609690826527522329356098070468403313;
 		t -= floor(t);
 		return cubic_mul * t * (t - 0.5f) * (t - 1.0f);
 	}
@@ -275,7 +276,7 @@ static double osc(State *state, double t)
 	};
 }
 
-static IndexPair render_note(State *state, int8_t note, uint16_t ticks)
+static IndexPair render_note(State *state, int8_t note, uint64_t ticks)
 {
 	double fnote = (double)note + (1.0 / 65536.0) * (int16_t)state->settings[SETTING_PITCH_BEND];
 	double base_freq   = 440.0 * pow(2.0, fnote / 12.0);
@@ -286,23 +287,23 @@ static IndexPair render_note(State *state, int8_t note, uint16_t ticks)
 	double pitch_slide = (log(2.0) / 1200.0) * (int16_t)state->settings[SETTING_PITCH_SLIDE];
 	float instr_amp = (1.0f / 256.0f) * state->settings[SETTING_INSTRUMENT_VOL];
 
-	uint64_t start_time   = state->current_us;
-	uint64_t sustain_time = start_time + state->tick_length * ticks;
-	uint64_t attack_time  = start_time + 1000000ULL * state->settings[SETTING_ATTACK_TIME] / 256;
-	uint64_t decay_time   = attack_time + 1000000ULL * state->settings[SETTING_DECAY_TIME] / 256;
-	uint64_t release_time = sustain_time + 1000000ULL * state->settings[SETTING_RELEASE_TIME] / 256;
+	int64_t start_time   = state->current_us;
+	int64_t sustain_time = start_time + state->tick_length * ticks;
+	int64_t attack_time  = start_time + 1000000LL * state->settings[SETTING_ATTACK_TIME] / 256;
+	int64_t decay_time   = attack_time + 1000000LL * state->settings[SETTING_DECAY_TIME] / 256;
+	int64_t release_time = sustain_time + 1000000LL * state->settings[SETTING_RELEASE_TIME] / 256;
 
-	uint64_t start_sample   =   start_time * state->sample_rate / 1000000;
-	uint64_t sustain_sample = sustain_time * state->sample_rate / 1000000;
-	uint64_t attack_sample  =  attack_time * state->sample_rate / 1000000;
-	uint64_t decay_sample   =   decay_time * state->sample_rate / 1000000;
-	uint64_t release_sample = release_time * state->sample_rate / 1000000;
+	int64_t start_sample   =   start_time * state->sample_rate / 1000000;
+	int64_t sustain_sample = sustain_time * state->sample_rate / 1000000;
+	int64_t attack_sample  =  attack_time * state->sample_rate / 1000000;
+	int64_t decay_sample   =   decay_time * state->sample_rate / 1000000;
+	int64_t release_sample = release_time * state->sample_rate / 1000000;
 
 	float adsr_amp = 0.0f;
 
 	IndexPair range = vector_f_ensure(&state->samples, (IndexPair){ start_sample, release_sample });
 	if (note == -128) return range;
-	for (uint64_t i = range.begin; i < range.end; i++)
+	for (int64_t i = range.begin; i < range.end; i++)
 	{
 		float a;
 		if (i >= sustain_sample)
@@ -333,72 +334,70 @@ static IndexPair render_note(State *state, int8_t note, uint16_t ticks)
 				p += lfo_amp / den * (-lfo_omega * wp + pitch_slide * lp);
 			}
 		}
-		state->samples.data[i] += a * instr_amp * osc(state, my_fma(base_freq, p, start_phase));
+		vector_at(&state->samples, i) += a * instr_amp * osc(state, my_fma(base_freq, p, start_phase));
 	}
 	return range;
 }
 
-static void _fx(State *state, uint8_t fx, uint64_t a, uint64_t b, uint64_t begin, uint64_t end)
+static IndexPair apply_fx(State *state, uint8_t fx, uint64_t ticks)
 {
+	int64_t start_time = state->current_us;
+	int64_t end_time   = start_time + state->tick_length * ticks;
+	int64_t start_sample = start_time * state->sample_rate / 1000000;
+	int64_t end_sample   =   end_time * state->sample_rate / 1000000;
 	switch (fx)
 	{
 	case FX_LINEAR_FADE:
 	{
 		float amp = (1.0f / 4096.0f) * state->fxsettings[FXSETTING_LINEAR_FADE_START_AMP];
 		float amp2 = (1.0f / 4096.0f) * state->fxsettings[FXSETTING_LINEAR_FADE_END_AMP];
-		float inc = (amp2 - amp) / (b - a);
-		amp += (amp2 - amp) * (begin - a) / (b - a);
-		for (uint64_t i = begin; i < end; i++)
+		IndexPair range = vector_f_ensure(&state->samples, (IndexPair){ start_sample, end_sample });
+		float inc = (amp2 - amp) / (end_sample - start_sample);
+		amp += (amp2 - amp) * (range.begin - start_sample) / (end_sample - start_sample);
+		for (int64_t i = range.begin; i < range.end; i++)
 		{
-			state->samples.data[i] *= amp;
+			vector_at(&state->samples, i) *= amp;
 			amp += inc;
 		}
-		break;
+		return range;
 	}
 	case FX_EXP_FADE:
 	{
 		float amp = (1.0f / 4096.0f) * state->fxsettings[FXSETTING_EXP_FADE_START_AMP];
 		float amp2 = (1.0f / 4096.0f) * state->fxsettings[FXSETTING_EXP_FADE_END_AMP];
-		float mul = powf(amp2 / amp, 1.0f / (b - a));
-		amp *= powf(amp2 / amp, (begin - a) / (b - a));
-		for (uint64_t i = begin; i < end; i++)
+		IndexPair range = vector_f_ensure(&state->samples, (IndexPair){ start_sample, end_sample });
+		float mul = powf(amp2 / amp, 1.0f / (end_sample - start_sample));
+		amp *= powf(amp2 / amp, (range.begin - start_sample) / (end_sample - start_sample));
+		for (int64_t i = range.begin; i < range.end; i++)
 		{
-			state->samples.data[i] *= amp;
+			vector_at(&state->samples, i) *= amp;
 			amp *= mul;
 		}
-		break;
+		return range;
 	}
 	case FX_AMP:
 	{
 		float amp = (1.0f / 4096.0f) * state->fxsettings[FXSETTING_AMP_AMP];
-		for (uint64_t i = begin; i < end; i++)
-			state->samples.data[i] *= amp;
-		break;
+		IndexPair range = vector_f_ensure(&state->samples, (IndexPair){ start_sample, end_sample });
+		for (int64_t i = range.begin; i < range.end; i++)
+			vector_at(&state->samples, i) *= amp;
+		return range;
 	}
 	case FX_CLIP:
 	{
 		float amp = (1.0f / 4096.0f) * state->fxsettings[FXSETTING_CLIP_AMP];
-		for (uint64_t i = begin; i < end; i++)
+		IndexPair range = vector_f_ensure(&state->samples, (IndexPair){ start_sample, end_sample });
+		for (int64_t i = range.begin; i < range.end; i++)
 		{
-			float s = state->samples.data[i];
+			float s = vector_at(&state->samples, i);
 			if (s > amp) s = amp;
 			if (s < -amp) s = -amp;
-			state->samples.data[i] = s;
+			vector_at(&state->samples, i) = s;
 		}
-		break;
+		return range;
 	}
 	}
-}
-
-static IndexPair apply_fx(State *state, uint8_t fx, uint16_t ticks)
-{
-	uint64_t start_time = state->current_us;
-	uint64_t end_time   = start_time + state->tick_length * ticks;
-	uint64_t start_sample = start_time * state->sample_rate / 1000000;
-	uint64_t end_sample   =   end_time * state->sample_rate / 1000000;
-	IndexPair range = vector_f_ensure(&state->samples, (IndexPair){ start_sample, end_sample });
-	_fx(state, fx, start_sample, end_sample, range.begin, range.end);
-	return range;
+	return (IndexPair){ start_sample, start_sample };
 }
 
 enum StepError
@@ -414,21 +413,19 @@ static IndexPair mark_frames(State *state, IndexPair range, uint32_t key, RGB co
 {
 	if (range.begin < range.end)
 	{
-		uint64_t frame_begin = range.begin * state->fps / state->sample_rate;
-		uint64_t frame_end = (range.end * state->fps + state->sample_rate - 1) / state->sample_rate;
+		int64_t frame_begin = range.begin * state->fps / state->sample_rate;
+		int64_t frame_end = (range.end * state->fps + state->sample_rate - 1) / state->sample_rate;
 		IndexPair f_range = vector_frame_ensure(&state->frames, (IndexPair){ frame_begin, frame_end });
-		for (uint64_t i = f_range.begin; i < f_range.end; i++)
+		for (int64_t i = f_range.begin; i < f_range.end; i++)
 		{
-			if (state->frames.data[i].instr.data == NULL)
-				state->frames.data[i].instr = vector_fi_create(128);
-			uint64_t fi_begin = state->frames.data[i].instr.length;
+			uint64_t fi_begin = vector_at(&state->frames, i).instr.length;
 			uint64_t fi_end = fi_begin + state->stack_ptr + 1;
-			IndexPair fi_range = vector_fi_ensure(&state->frames.data[i].instr, (IndexPair){ fi_begin, fi_end });
+			SimpleIndexPair fi_range = vector_simple_fi_ensure(&vector_at(&state->frames, i).instr, (SimpleIndexPair){ fi_begin, fi_end });
 			for (uint64_t j = fi_range.begin; j < fi_range.end; j++)
 			{
 				uint64_t stk = j - fi_begin;
 				uint64_t ip = stk == state->stack_ptr ? key : state->call_stack[stk] - 1;
-				FrameInstr *fi = state->frames.data[i].instr.data + j;
+				FrameInstr *fi = vector_at(&state->frames, i).instr.data + j;
 				fi->ip = ip;
 				fi->col = color;
 				fi->note = stk == 0 ? note : -128;
@@ -474,7 +471,7 @@ static enum StepError state_step(State *state, const uint8_t *prog, uint64_t pro
 		int8_t note = get_s8(instr, 1);
 		uint16_t ticks = get_u16(instr, 2);
 		mark_frames(state, render_note(state, note, ticks), state->ip, COL_NOTE, note);
-		state->current_us += state->tick_length * ticks;
+		state->current_us += (int64_t)state->tick_length * ticks;
 		state->ip++;
 		return STEP_SUCCESS;
 	}
@@ -497,8 +494,6 @@ static enum StepError state_step(State *state, const uint8_t *prog, uint64_t pro
 	case 0x04:
 	{
 		state->current_us += (int64_t)get_s24(instr, 1) * state->tick_length;
-		if (state->current_us >= 0x8000000000000000ULL)
-			state->current_us = 0;
 		state->ip++;
 		return STEP_SUCCESS;
 	}
@@ -515,7 +510,7 @@ static enum StepError state_step(State *state, const uint8_t *prog, uint64_t pro
 		uint8_t fx = get_u8(instr, 1);
 		uint16_t ticks = get_u16(instr, 2);
 		mark_frames(state, apply_fx(state, fx, ticks), state->ip, COL_FX, -128);
-		state->current_us += state->tick_length * ticks;
+		state->current_us += (int64_t)state->tick_length * ticks;
 		state->ip++;
 		return STEP_SUCCESS;
 	}
@@ -573,7 +568,7 @@ static enum StepError state_step(State *state, const uint8_t *prog, uint64_t pro
 		uint16_t mult = packed >> 12;
 
 		int8_t note = state->r[reg_note] & 0xFF;
-		int32_t ticks = state->r[reg_ticks] * mult;
+		int64_t ticks = (int64_t)state->r[reg_ticks] * mult;
 		if (ticks >= 0) mark_frames(state, render_note(state, note, ticks), state->ip, COL_NOTE, note);
 		state->current_us += state->tick_length * ticks;
 		state->ip++;
@@ -587,7 +582,7 @@ static enum StepError state_step(State *state, const uint8_t *prog, uint64_t pro
 		uint16_t mult = packed >> 12;
 
 		int8_t note = state->r[reg_note] & 0xFF;
-		int32_t ticks = state->r[reg_ticks] * mult;
+		int64_t ticks = (int64_t)state->r[reg_ticks] * mult;
 		if (ticks >= 0) mark_frames(state, render_note(state, note, ticks), state->ip, COL_NOTE, note);
 		state->ip++;
 		return STEP_SUCCESS;
@@ -651,8 +646,6 @@ static enum StepError state_step(State *state, const uint8_t *prog, uint64_t pro
 		int64_t mult = packed >> 6;
 		if (mult >= 131072) mult -= 262144;
 		state->current_us += mult * state->r[reg] * state->tick_length;
-		if (state->current_us >= 0x8000000000000000ULL)
-			state->current_us = 0;
 		state->ip++;
 		return STEP_SUCCESS;
 	}
@@ -714,9 +707,9 @@ static enum StepError state_step(State *state, const uint8_t *prog, uint64_t pro
 		uint16_t packed = get_u16(instr, 2);
 		uint8_t reg_ticks = packed & 0x3F;
 		uint16_t mult = packed >> 6;
-		int32_t ticks = state->r[reg_ticks] * mult;
+		int64_t ticks = (int64_t)state->r[reg_ticks] * mult;
 		if (ticks >= 0) mark_frames(state, apply_fx(state, fx, ticks), state->ip, COL_FX, -128);
-		state->current_us += state->tick_length * ticks;
+		state->current_us += (int64_t)state->tick_length * ticks;
 		state->ip++;
 		return STEP_SUCCESS;
 	}
@@ -726,7 +719,7 @@ static enum StepError state_step(State *state, const uint8_t *prog, uint64_t pro
 		uint16_t packed = get_u16(instr, 2);
 		uint8_t reg_ticks = packed & 0x3F;
 		uint16_t mult = packed >> 6;
-		int32_t ticks = state->r[reg_ticks] * mult;
+		int64_t ticks = (int64_t)state->r[reg_ticks] * mult;
 		if (ticks >= 0) mark_frames(state, apply_fx(state, fx, ticks), state->ip, COL_FX, -128);
 		state->ip++;
 		return STEP_SUCCESS;
@@ -776,7 +769,8 @@ static uint8_t write_wav(const State *state, const RenderInput *input, RenderSta
 	#define write_pun(file, type, type2, val) \
 	{ \
 		type tmp; \
-		memcpy(&tmp, &val, sizeof(type)); \
+		type2 tmp2 = val; \
+		memcpy(&tmp, &tmp2, sizeof(type)); \
 		for (uint64_t i = 0; i < sizeof(type) * 8; i += 8) \
 			if (fputc(tmp >> i, file) == EOF) goto err; \
 	}
@@ -808,9 +802,15 @@ static uint8_t write_wav(const State *state, const RenderInput *input, RenderSta
 	long pos_data_cksize = ftell(file);
 	if (pos_data_cksize == -1) goto err;
 	write_num(file, uint32_t, 0);
-	for (uint64_t i = 0; i < state->samples.length; i++)
+	int64_t i = 0;
+	for (; i < state->samples.begin; i++)
 	{
-		write_pun(file, uint32_t, float, state->samples.data[i]);
+		write_pun(file, uint32_t, float, 0);
+		status->samples_saved++;
+	}
+	for (; i < state->samples.end; i++)
+	{
+		write_pun(file, uint32_t, float, vector_at(&state->samples, i));
 		status->samples_saved++;
 	}
 	long pos_end = ftell(file);
@@ -890,6 +890,8 @@ static void rfc_get_frequency(RenderFrameContext *rfc)
 
 static RenderFrameContext *render_frame_start(const State *state, const RenderInput *input, uint8_t *img)
 {
+	(void)state;
+	(void)img;
 	RenderFrameContext *rfc = malloc(sizeof(RenderFrameContext) + sizeof(RGB) * input->length);
 	if (rfc == NULL) return NULL;
 	for (uint64_t i = 0; i < RFC_FREQ_BINS; i += 2)
@@ -905,7 +907,7 @@ static RenderFrameContext *render_frame_start(const State *state, const RenderIn
 	for (uint64_t i = 0; i < RFC_FREQ_BINS; i++)
 		rfc->freq_prev[i] = -80.0f;
 	for (uint64_t i = 0; i < input->length; i++)
-		rfc->instr_bright[i] = (RGB){};
+		rfc->instr_bright[i] = (RGB){{ 0, 0, 0 }};
 	return rfc;
 }
 
@@ -919,7 +921,8 @@ static void render_frame(RenderFrameContext *rfc, const State *state, const Rend
 	uint16_t split_y1 = 1;
 	uint16_t split_y2 = H >> 2;
 	uint16_t split_y3 = H - 1;
-	vector_fi *executing_instrs = &state->frames.data[t].instr;
+	vector_simple_fi dummy = vector_simple_fi_create(0);
+	vector_simple_fi *executing_instrs = t >= state->frames.begin ? &vector_at(&state->frames, t).instr : &dummy;
 
 	memset(img, 32, 3*W*H);
 
@@ -984,14 +987,14 @@ static void render_frame(RenderFrameContext *rfc, const State *state, const Rend
 	int64_t samples_end = (int64_t)(t + 1) * input->opt.sample_rate / input->opt.fps;
 	int64_t samples_begin = samples_end - RFC_FREQ_BINS;
 	int64_t endpoint_2 = samples_end;
-	if (endpoint_2 > state->samples.length) endpoint_2 = state->samples.length;
+	if (endpoint_2 > state->samples.end) endpoint_2 = state->samples.end;
 	int64_t endpoint_1 = endpoint_2;
-	if (endpoint_1 > 0) endpoint_1 = 0;
+	if (endpoint_1 > state->samples.begin) endpoint_1 = state->samples.begin;
 	int64_t idx = samples_begin;
 	for (; idx < endpoint_1; idx++)
 		rfc->freq_real[idx - samples_begin] = 0.0f;
 	for (; idx < endpoint_2; idx++)
-		rfc->freq_real[idx - samples_begin] = state->samples.data[idx];
+		rfc->freq_real[idx - samples_begin] = vector_at(&state->samples, idx);
 	for (; idx < samples_end; idx++)
 		rfc->freq_real[idx - samples_begin] = 0.0f;
 	rfc_get_frequency(rfc);
@@ -1028,14 +1031,14 @@ static void render_frame(RenderFrameContext *rfc, const State *state, const Rend
 	samples_end = (int64_t)(t + 1) * input->opt.sample_rate / input->opt.fps + offset;
 	samples_begin = samples_end - RFC_FREQ_BINS;
 	endpoint_2 = samples_end;
-	if (endpoint_2 > state->samples.length) endpoint_2 = state->samples.length;
+	if (endpoint_2 > state->samples.end) endpoint_2 = state->samples.end;
 	endpoint_1 = endpoint_2;
-	if (endpoint_1 > 0) endpoint_1 = 0;
+	if (endpoint_1 > state->samples.begin) endpoint_1 = state->samples.begin;
 	idx = samples_begin;
 	for (; idx < endpoint_1; idx++)
 		rfc->freq_real[idx - samples_begin] = 0.0f;
 	for (; idx < endpoint_2; idx++)
-		rfc->freq_real[idx - samples_begin] = state->samples.data[idx];
+		rfc->freq_real[idx - samples_begin] = vector_at(&state->samples, idx);
 	for (; idx < samples_end; idx++)
 		rfc->freq_real[idx - samples_begin] = 0.0f;
 	int prev_h = split_y1 + (split_y2 - split_y1) / 2;
@@ -1141,6 +1144,7 @@ static void render_frame(RenderFrameContext *rfc, const State *state, const Rend
 				img[(y*W+x)*3+2] = (1.0f - alpha) * img[(y*W+x)*3+2] + alpha * colb;
 			}
 	}
+	vector_simple_fi_destroy(&dummy);
 }
 
 static void render_frame_end(RenderFrameContext *rfc)
@@ -1168,11 +1172,11 @@ static uint8_t write_ppms(const State *state, const RenderInput *input, RenderSt
 	if (img == NULL) return 1;
 	RenderFrameContext *rfc = render_frame_start(state, input, img);
 	char ppm_header[20];
-	int ppm_header_size = sprintf(ppm_header, "P6\n%" PRIu16 " %" PRIu16 "\n255\n", input->opt.width, input->opt.height);
-	for (uint32_t i = 0; i < state->frames.length; i++)
+	size_t ppm_header_size = sprintf(ppm_header, "P6\n%" PRIu16 " %" PRIu16 "\n255\n", input->opt.width, input->opt.height);
+	for (int64_t i = 0; i < state->frames.end; i++)
 	{
 		render_frame(rfc, state, input, img, i);
-		sprintf(filename, "%s/frame%d.ppm", input->opt.frames_dir, i);
+		sprintf(filename, "%s/frame%" PRId64 ".ppm", input->opt.frames_dir, i);
 		FILE *file = fopen(filename, "wb");
 		if (file == NULL)
 		{
@@ -1237,15 +1241,20 @@ static void *sender(void *arg)
 static uint32_t write_ffmpeg(const State *state, const RenderInput *input, RenderStatus *status)
 {
 	if (!input->opt.generate_audio && !input->opt.generate_video) return 0;
+	int64_t audio_delay = state->samples.begin;
+	if (audio_delay < 0) audio_delay = 0;
+	int64_t audio_length = state->samples.end - audio_delay;
+	if (audio_length < 0) audio_length = 0;
 	if (!input->opt.generate_video)
 	{
 		int pipefd[2];
 		if (pipe(pipefd)) return RENDER_STATUS_ERR_AUDIO;
 		char s[MAX_ARGS_LENGTH*2 + 256];
-		sprintf(s, "ffmpeg -y -loglevel quiet -f f32%s -ar %d -ac 1 -i pipe:%d %s %s",
+		sprintf(s, "ffmpeg -y -loglevel quiet -f f32%s -ar %d -ac 1 -i pipe:%d -filter:a \"adelay=delays=%" PRId64 "S:all=1\" %s %s",
 			little_endian() ? "le" : "be",
 			input->opt.sample_rate,
 			pipefd[0],
+			audio_delay,
 			input->opt.ffmpeg_args_audio,
 			input->opt.audio_filename);
 		wordexp_t ffmpeg_args;
@@ -1278,9 +1287,9 @@ static uint32_t write_ffmpeg(const State *state, const RenderInput *input, Rende
 			&input->ctx->terminate,
 			&status->samples_saved,
 			sizeof(float),
-			sizeof(float) * state->samples.length,
+			sizeof(float) * audio_length,
 			8192,
-			state->samples.data,
+			audio_length > 0 ? &vector_at(&state->samples, audio_delay) : NULL,
 			pipefd[1],
 			0
 		};
@@ -1299,8 +1308,8 @@ static uint32_t write_ffmpeg(const State *state, const RenderInput *input, Rende
 		close(pipe_a[1]);
 		return RENDER_STATUS_ERR_AUDIO | RENDER_STATUS_ERR_VIDEO;
 	}
-	char s[MAX_ARGS_LENGTH*4 + 256];
-	int s_len = sprintf(s, "ffmpeg -y -loglevel quiet -f f32%s -ar %" PRIu32 " -ac 1 -i pipe:%d -f rawvideo -pixel_format rgb24 -video_size %" PRIu16 "x%" PRIu16 " -framerate %" PRIu16 " -i pipe:%d -map 0:a -map 1:v %s %s",
+	char s[MAX_ARGS_LENGTH*4 + 300];
+	int s_len = sprintf(s, "ffmpeg -y -loglevel quiet -f f32%s -ar %" PRIu32 " -ac 1 -i pipe:%d -f rawvideo -pixel_format rgb24 -video_size %" PRIu16 "x%" PRIu16 " -framerate %" PRIu16 " -i pipe:%d -filter_complex \"[0:a]adelay=delays=%" PRId64 "S:all=1,asplit=%s\" -map \"[av]\" -map 1:v %s %s",
 		little_endian() ? "le" : "be",
 		input->opt.sample_rate,
 		pipe_a[0],
@@ -1308,10 +1317,12 @@ static uint32_t write_ffmpeg(const State *state, const RenderInput *input, Rende
 		input->opt.height,
 		input->opt.fps,
 		pipe_v[0],
+		audio_delay,
+		input->opt.generate_audio ? "2[av][aa]" : "1[av]",
 		input->opt.ffmpeg_args_video,
 		input->opt.video_filename);
 	if (input->opt.generate_audio)
-		sprintf(s + s_len, " -map 0:a %s %s", input->opt.ffmpeg_args_audio, input->opt.audio_filename);
+		sprintf(s + s_len, " -map \"[aa]\" %s %s", input->opt.ffmpeg_args_audio, input->opt.audio_filename);
 	wordexp_t ffmpeg_args;
 	if (wordexp(s, &ffmpeg_args, 0))
 	{
@@ -1349,9 +1360,9 @@ static uint32_t write_ffmpeg(const State *state, const RenderInput *input, Rende
 		&input->ctx->terminate,
 		&status->samples_saved,
 		sizeof(float),
-		sizeof(float) * state->samples.length,
+		sizeof(float) * audio_length,
 		8192,
-		state->samples.data,
+		audio_length > 0 ? &vector_at(&state->samples, audio_delay) : NULL,
 		pipe_a[1],
 		0
 	};
@@ -1393,7 +1404,7 @@ static uint32_t write_ffmpeg(const State *state, const RenderInput *input, Rende
 		pipe_v[1],
 		1
 	};
-	for (uint32_t i = 0; i < state->frames.length; i++)
+	for (int64_t i = 0; i < state->frames.end; i++)
 	{
 		render_frame(rfc, state, input, img, i);
 		if (sender(&send_v)) err |= RENDER_STATUS_ERR_VIDEO;
@@ -1446,8 +1457,10 @@ void render(RenderInput *input)
 			break;
 		}
 		step_err = state_step(&state, input->instr, input->length);
-		input->ctx->status.samples_estimate = state.samples.length;
-		input->ctx->status.frames_estimate = state.frames.length;
+		if (state.samples.end >= 0)
+			input->ctx->status.samples_estimate = state.samples.end;
+		if (state.frames.end >= 0)
+			input->ctx->status.frames_estimate = state.frames.end;
 		steps++;
 		if (step_err == STEP_SUCCESS) continue;
 		if (step_err == STEP_EXIT)
