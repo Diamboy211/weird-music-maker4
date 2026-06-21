@@ -28,11 +28,8 @@ typedef struct
 		name v; \
 		v.length = 0; \
 		v.length_cap = length_cap; \
-		v._real_size = 8; \
-		if (v._real_size > length_cap) \
-			v._real_size = length_cap; \
-		v.data = calloc(v._real_size, sizeof(type)); \
-		if (v.data == NULL) v._real_size = 0; \
+		v._real_size = 0; \
+		v.data = NULL; \
 		return v; \
 	} \
 	void name##_destroy(name *v) \

@@ -115,7 +115,8 @@ typedef struct
 define_vector(vector_frame, Frame, (Frame){vector_simple_fi_create(128)})
 define_map(map_u32_u64, node_u32_u64, uint32_t, uint64_t, ~(uint64_t)0)
 
-#define CALL_STACK_MAX 16
+#define CALL_STACK_MAX 32
+#define TRACK_STACK_MAX 32
 
 typedef struct
 {
@@ -257,7 +258,7 @@ static double osc(State *state, double t)
 	case INSTRUMENT_FILT_NOISE:
 	{
 		double t2 = t + t;
-		static const int CONV_RADIUS = 12;
+		static const int CONV_RADIUS = 64;
 		double lp1 = 0.0;
 		for (int i = -CONV_RADIUS; i <= CONV_RADIUS; i++)
 		{
