@@ -43,8 +43,8 @@ typedef struct
 	void _name##_clear(_name *_v) \
 	{ \
 		free(_v->_data); \
-		_v->begin = _v->end = _left_cap; \
-		_v->_begin = _v->_end = _left_cap; \
+		_v->begin = _v->end = _v->left_cap; \
+		_v->_begin = _v->_end = _v->left_cap; \
 		_v->_data = NULL; \
 	} \
 	IndexPair _name##_ensure(_name *_v, IndexPair _range) \
