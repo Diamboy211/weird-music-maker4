@@ -130,6 +130,7 @@ int editor_load(Editor *editor, const char *filename)
 			strncpy(editor->filename, filename, MAX_FILENAME_LENGTH);
 			list_swap(&editor->data, &data_new);
 			list_destroy(&data_new);
+			fclose(file);
 			editor_recurses();
 			return 0;
 		}
