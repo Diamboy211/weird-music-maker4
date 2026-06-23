@@ -92,6 +92,15 @@ enum OP
 	OP_COUNT
 };
 
+enum StepError
+{
+	STEP_SUCCESS,
+	STEP_EXIT,
+	STEP_EOF,
+	STEP_UNK,
+	STEP_MAX
+};
+
 typedef union RGB
 {
 	struct { float r, g, b; };
@@ -450,14 +459,38 @@ static IndexPair apply_fx(State *state, uint8_t fx, uint64_t ticks)
 	return (IndexPair){ start_sample, start_sample };
 }
 
-enum StepError
+static void mix_down(State *state, uint16_t tracks)
 {
-	STEP_SUCCESS,
-	STEP_EXIT,
-	STEP_EOF,
-	STEP_UNK,
-	STEP_MAX
-};
+	vector_f *samples_dest = state->sample_stack + (state->track_stack_ptr - tracks);
+	for (uint16_t i = 1; i <= tracks; i++)
+	{
+		vector_f *samples_src = samples_dest + i;
+		IndexPair range = vector_f_ensure(samples_dest, (IndexPair){ samples_src->begin, samples_src->end });
+		for (int64_t j = range.begin; j < range.end; j++)
+			vector_at(samples_dest, j) += vector_at(samples_src, j);
+		vector_f_clear(samples_src);
+	}
+	vector_frame *frames_dest = state->frame_stack + (state->track_stack_ptr - tracks);
+	for (uint16_t i = 1; i <= tracks; i++)
+	{
+		vector_frame *frames_src = frames_dest + i;
+		IndexPair range = vector_frame_ensure(frames_dest, (IndexPair){ frames_src->begin, frames_src->end });
+		for (int64_t j = range.begin; j < range.end; j++)
+		{
+			Frame *frame_dest = &vector_at(frames_dest, j);
+			Frame *frame_src = &vector_at(frames_src, j);
+			uint64_t s1 = frame_dest->instr.length;
+			uint64_t s2 = s1 + frame_src->instr.length;
+			SimpleIndexPair range2 = simple_vector_fi_ensure(&frame_dest->instr, (SimpleIndexPair){ s1, s2 });
+			for (uint64_t k = range2.begin; k < range2.end; k++)
+				frame_dest->instr.data[k] = frame_src->instr.data[k - s1];
+		}
+		for (int64_t j = frames_src->begin; j < frames_src->end; j++)
+			simple_vector_fi_destroy(&vector_at(frames_src, j).instr);
+		vector_frame_clear(frames_src);
+	}
+	state->track_stack_ptr -= tracks;
+}
 
 static IndexPair mark_frames(State *state, IndexPair range, uint32_t key, RGB color, int8_t note)
 {
@@ -790,6 +823,42 @@ static enum StepError state_step(State *state, const uint8_t *prog, uint64_t pro
 		state->call_stack[state->call_stack_ptr++] = state->ip + 1;
 		state->ip = jmp;
 		return STEP_SUCCESS;
+	}
+	case 0x20:
+	{
+		uint8_t op = get_u8(instr, 1);
+		uint16_t val = get_u16(instr, 2);
+		switch (op)
+		{
+		case 0:
+			if (val == 0)
+			{
+				if (state->track_stack_ptr + 1 >= TRACK_STACK_MAX) return STEP_EOF;
+				state->track_stack_ptr++;
+				state->ip++;
+				return STEP_SUCCESS;
+			}
+			if (val > state->track_stack_ptr) return STEP_EOF;
+			mix_down(state, val);
+			state->ip++;
+			return STEP_SUCCESS;
+		case 1:
+			if (val == 0)
+			{
+				if (state->save_stack_ptr + 1 >= SAVE_STACK_MAX) return STEP_EOF;
+				state->save_stack[state->save_stack_ptr + 1] = state->save_stack[state->save_stack_ptr];
+				state->save_stack_ptr++;
+				state->ip++;
+				return STEP_SUCCESS;
+			}
+			if (state->save_stack_ptr == 0) return STEP_EOF;
+			state->save_stack_ptr--;
+			state->ip++;
+			return STEP_SUCCESS;
+		default:
+			state->ip++;
+			return STEP_SUCCESS;
+		}
 	}
 	case 0xFF:
 	{

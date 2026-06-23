@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <string.h>
+#include <inttypes.h>
 #include "helper.h"
 #include "instr.h"
 
@@ -35,7 +36,7 @@ static void get_note(char *s, const Editor *editor, int8_t note)
 static int cmd_00(char *s, int n, const Editor *editor, const uint8_t *c)
 {
 	(void)editor;
-	return snprintf(s, n, "set tick length to %uus", get_u24(c, 1));
+	return snprintf(s, n, "set tick length to %" PRIu32 "us", get_u24(c, 1));
 }
 
 static int cmd_01(char *s, int n, const Editor *editor, const uint8_t *c)
@@ -43,7 +44,7 @@ static int cmd_01(char *s, int n, const Editor *editor, const uint8_t *c)
 	char buf[6];
 	get_note(buf, editor, get_s8(c, 1));
 	uint16_t ticks = get_u16(c, 2);
-	return snprintf(s, n, "play %s for %d %s", buf, ticks, ticks != 1 ? "ticks" : "tick");
+	return snprintf(s, n, "play %s for %" PRIu16 " %s", buf, ticks, ticks != 1 ? "ticks" : "tick");
 }
 
 static int cmd_02(char *s, int n, const Editor *editor, const uint8_t *c)
@@ -51,7 +52,7 @@ static int cmd_02(char *s, int n, const Editor *editor, const uint8_t *c)
 	char buf[6];
 	get_note(buf, editor, get_s8(c, 1));
 	uint16_t ticks = get_u16(c, 2);
-	return snprintf(s, n, "play %s for %d %s without advancing", buf, ticks, ticks != 1 ? "ticks" : "tick");
+	return snprintf(s, n, "play %s for %" PRIu16 " %s without advancing", buf, ticks, ticks != 1 ? "ticks" : "tick");
 }
 
 static int cmd_03(char *s, int n, const Editor *editor, const uint8_t *c)
@@ -80,7 +81,7 @@ static int cmd_03(char *s, int n, const Editor *editor, const uint8_t *c)
 	case 13:
 	{
 		int16_t speed = get_s16(c, 2);
-		return snprintf(s, n, "change pitch slide to %+d %s/second", speed, speed == 1 || speed == -1 ? "cent" : "cents");
+		return snprintf(s, n, "change pitch slide to %+" PRId16 " %s/second", speed, speed == 1 || speed == -1 ? "cent" : "cents");
 	}
 	case 14: return snprintf(s, n, "change start phase to %.3f degrees", (360.0f / 65536.0f) * get_u16(c, 2));
 	case 15: return snprintf(s, n, "change lfo start phase to %.3f degrees", (360.0f / 65536.0f) * get_u16(c, 2));
@@ -99,7 +100,7 @@ static int cmd_04(char *s, int n, const Editor *editor, const uint8_t *c)
 	(void)editor;
 	int32_t dt = get_s24(c, 1);
 	int32_t t = dt < 0 ? -dt : dt;
-	return snprintf(s, n, "%s by %d %s", dt < 0 ? "rewind" : "seek", t, t != 1 ? "ticks" : "tick");
+	return snprintf(s, n, "%s by %" PRId32 " %s", dt < 0 ? "rewind" : "seek", t, t != 1 ? "ticks" : "tick");
 }
 
 static int cmd_05(char *s, int n, const Editor *editor, const uint8_t *c)
@@ -122,7 +123,7 @@ static int cmd_06(char *s, int n, const Editor *editor, const uint8_t *c)
 	(void)editor;
 	uint8_t fx = get_u8(c, 1);
 	uint16_t ticks = get_u16(c, 2);
-	return snprintf(s, n, "apply %s for %d %s",
+	return snprintf(s, n, "apply %s for %" PRIu16 " %s",
 		fx < fx_amt ? fx_names[fx] : "a non-existent fx", ticks, ticks != 1 ? "ticks" : "tick");
 }
 
@@ -131,7 +132,7 @@ static int cmd_07(char *s, int n, const Editor *editor, const uint8_t *c)
 	(void)editor;
 	uint8_t fx = get_u8(c, 1);
 	uint16_t ticks = get_u16(c, 2);
-	return snprintf(s, n, "apply %s for %d %s without advancing",
+	return snprintf(s, n, "apply %s for %" PRIu16 " %s without advancing",
 		fx < fx_amt ? fx_names[fx] : "a non-existent fx", ticks, ticks != 1 ? "ticks" : "tick");
 }
 
@@ -144,7 +145,7 @@ static int cmd_08(char *s, int n, const Editor *editor, const uint8_t *c)
 	uint8_t op = get_u8(c, 1);
 	uint8_t reg = op & 0x3F;
 	op >>= 6;
-	return snprintf(s, n, "r%hhu %s %hd", reg, op_names[op], get_s16(c, 2));
+	return snprintf(s, n, "r%" PRIu8 " %s %" PRId16, reg, op_names[op], get_s16(c, 2));
 }
 
 static int cmd_09(char *s, int n, const Editor *editor, const uint8_t *c)
@@ -158,7 +159,7 @@ static int cmd_09(char *s, int n, const Editor *editor, const uint8_t *c)
 	cond >>= 6;
 	int16_t dt = get_s16(c, 2);
 	int16_t t = dt < 0 ? -dt : dt;
-	return snprintf(s, n, "jump %hu %s %s if r%hhu %s",
+	return snprintf(s, n, "jump %" PRId16 " %s %s if r%" PRIu8 " %s",
 		t,
 		t != 1 ? "instructions" : "instruction",
 		dt < 0 ? "backwards" : "forwards",
@@ -196,7 +197,7 @@ static int cmd_11(char *s, int n, const Editor *editor, const uint8_t *c)
 	uint8_t reg_note = packed & 0x3F;
 	uint8_t reg_ticks = (packed >> 6) & 0x3F;
 	uint16_t mult = packed >> 12;
-	return snprintf(s, n, "play note r%hhu for %hur%hhu ticks", reg_note, mult, reg_ticks);
+	return snprintf(s, n, "play note r%" PRIu8 " for %" PRIu16 "r%" PRIu8 " ticks", reg_note, mult, reg_ticks);
 }
 
 static int cmd_12(char *s, int n, const Editor *editor, const uint8_t *c)
@@ -206,7 +207,7 @@ static int cmd_12(char *s, int n, const Editor *editor, const uint8_t *c)
 	uint8_t reg_note = packed & 0x3F;
 	uint8_t reg_ticks = (packed >> 6) & 0x3F;
 	uint16_t mult = packed >> 12;
-	return snprintf(s, n, "play note r%hhu for %hur%hhu ticks without advancing", reg_note, mult, reg_ticks);
+	return snprintf(s, n, "play note r%" PRIu8 " for %" PRIu16 "r%" PRIu8 " ticks without advancing", reg_note, mult, reg_ticks);
 }
 
 static int cmd_13(char *s, int n, const Editor *editor, const uint8_t *c)
@@ -228,12 +229,12 @@ static int cmd_13(char *s, int n, const Editor *editor, const uint8_t *c)
 		map_a = -map_b;
 	}
 	if (sat && sgn)
-		return snprintf(s, n, "change setting 0x%02X to clamped_map(r%hhu, %hhd, %hhd, %d, %d)", setting, reg, -div, div, map_a, map_b);
+		return snprintf(s, n, "change setting 0x%02X to clamped_map(r%" PRIu8 ", %" PRId8 ", %" PRId8 ", %" PRId32 ", %" PRId32 ")", setting, reg, -div, div, map_a, map_b);
 	if (sat)
-		return snprintf(s, n, "change setting 0x%02X to clamped_map(r%hhu, 0, %hhd, %d, %d)", setting, reg, div, map_a, map_b);
+		return snprintf(s, n, "change setting 0x%02X to clamped_map(r%" PRIu8 ", 0, %" PRId8 ", %" PRId32 ", %" PRId32 ")", setting, reg, div, map_a, map_b);
 	if (sgn)
-		return snprintf(s, n, "change setting 0x%02X to map(r%hhu, %hhd, %hhd, %d, %d)", setting, reg, -div, div, map_a, map_b);
-	return snprintf(s, n, "change setting 0x%02X to map(r%hhu, 0, %hhd, %d, %d)", setting, reg, div, map_a, map_b);
+		return snprintf(s, n, "change setting 0x%02X to map(r%" PRIu8 ", %" PRId8 ", %" PRId8 ", %" PRId32 ", %" PRId32 ")", setting, reg, -div, div, map_a, map_b);
+	return snprintf(s, n, "change setting 0x%02X to map(r%" PRIu8 ", 0, %" PRId8 ", %" PRId32 ", %" PRId32 ")", setting, reg, div, map_a, map_b);
 }
 
 static int cmd_14(char *s, int n, const Editor *editor, const uint8_t *c)
@@ -243,7 +244,7 @@ static int cmd_14(char *s, int n, const Editor *editor, const uint8_t *c)
 	uint8_t reg = packed & 0x3F;
 	int32_t mult = packed >> 6;
 	if (mult >= 131072) mult -= 262144;
-	return snprintf(s, n, "seek by %dr%hhu", mult, reg);
+	return snprintf(s, n, "seek by %" PRId32 "r%hhu", mult, reg);
 }
 
 static int cmd_15(char *s, int n, const Editor *editor, const uint8_t *c)
@@ -265,12 +266,12 @@ static int cmd_15(char *s, int n, const Editor *editor, const uint8_t *c)
 		map_a = -map_b;
 	}
 	if (sat && sgn)
-		return snprintf(s, n, "change fx setting 0x%02X to clamped_map(r%hhu, %hhd, %hhd, %d, %d)", setting, reg, -div, div, map_a, map_b);
+		return snprintf(s, n, "change fx setting 0x%02X to clamped_map(r%" PRIu8 ", %" PRId8 ", %" PRId8 ", %" PRId32 ", %" PRId32 ")", setting, reg, -div, div, map_a, map_b);
 	if (sat)
-		return snprintf(s, n, "change fx setting 0x%02X to clamped_map(r%hhu, 0, %hhd, %d, %d)", setting, reg, div, map_a, map_b);
+		return snprintf(s, n, "change fx setting 0x%02X to clamped_map(r%" PRIu8 ", 0, %" PRId8 ", %" PRId32 ", %" PRId32 ")", setting, reg, div, map_a, map_b);
 	if (sgn)
-		return snprintf(s, n, "change fx setting 0x%02X to map(r%hhu, %hhd, %hhd, %d, %d)", setting, reg, -div, div, map_a, map_b);
-	return snprintf(s, n, "change fx setting 0x%02X to map(r%hhu, 0, %hhd, %d, %d)", setting, reg, div, map_a, map_b);
+		return snprintf(s, n, "change fx setting 0x%02X to map(r%" PRIu8 ", %" PRId8 ", %" PRId8 ", %" PRId32 ", %" PRId32 ")", setting, reg, -div, div, map_a, map_b);
+	return snprintf(s, n, "change fx setting 0x%02X to map(r%" PRIu8 ", 0, %" PRId8 ", %" PRId32 ", %" PRId32 ")", setting, reg, div, map_a, map_b);
 }
 
 static int cmd_16(char *s, int n, const Editor *editor, const uint8_t *c)
@@ -280,7 +281,7 @@ static int cmd_16(char *s, int n, const Editor *editor, const uint8_t *c)
 	uint16_t packed = get_u16(c, 2);
 	uint8_t reg_ticks = packed & 0x3F;
 	uint16_t mult = packed >> 6;
-	return snprintf(s, n, "apply %s for %hur%hhu ticks",
+	return snprintf(s, n, "apply %s for %" PRIu16 "r%" PRIu8 " ticks",
 		fx < fx_amt ? fx_names[fx] : "a non-existent fx", mult, reg_ticks);
 }
 
@@ -291,7 +292,7 @@ static int cmd_17(char *s, int n, const Editor *editor, const uint8_t *c)
 	uint16_t packed = get_u16(c, 2);
 	uint8_t reg_ticks = packed & 0x3F;
 	uint16_t mult = packed >> 6;
-	return snprintf(s, n, "apply %s for %hur%hhu ticks without advancing",
+	return snprintf(s, n, "apply %s for %" PRIu16 "r%" PRIu8 " ticks without advancing",
 		fx < fx_amt ? fx_names[fx] : "a non-existent fx", mult, reg_ticks);
 }
 
@@ -309,6 +310,23 @@ static int cmd_1f(char *s, int n, const Editor *editor, const uint8_t *c)
 	char label[10];
 	get_label_name(label, editor, l);
 	return snprintf(s, n, "call (%s)", label);
+}
+
+static int cmd_20(char *s, int n, const Editor *editor, const uint8_t *c)
+{
+	(void)editor;
+	uint8_t op = get_u8(c, 1);
+	uint16_t val = get_u16(c, 2);
+	switch (op)
+	{
+	case 0:
+		if (val == 0) return snprintf(s, n, "push track");
+		return snprintf(s, n, "mix down %" PRIu16 " %s", val, val == 1 ? "track" : "tracks");
+	case 1:
+		if (val == 0) return snprintf(s, n, "push all settings");
+		return snprintf(s, n, "pop all settings");
+	default: return snprintf(s, n, "unknown stack operation");
+	}
 }
 
 static int cmd_un(char *s, int n, const Editor *editor, const uint8_t *c)
@@ -330,7 +348,7 @@ static int (*cmd[256])(char *, int, const Editor *, const uint8_t *) = {
 	cmd_08, cmd_09, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un,
 /*10*/	cmd_10, cmd_11, cmd_12, cmd_13, cmd_14, cmd_15, cmd_16, cmd_17,
 	cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_1e, cmd_1f,
-/*20*/	cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un,
+/*20*/	cmd_20, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un,
 	cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un,
 /*30*/	cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un,
 	cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un, cmd_un,
