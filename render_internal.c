@@ -60,6 +60,7 @@ enum Setting
 	SETTING_START_PHASE,
 	SETTING_LFO_PHASE,
 	SETTING_FILT_NOISE_FLOOR,
+	SETTING_SAVE_PHASE,
 	SETTING_COUNT
 };
 
@@ -132,6 +133,7 @@ typedef struct
 {
 	int32_t r[64];
 	int64_t current_us;
+	double phases[5], lfo_phis[5];
 	uint32_t tick_length;
 	uint16_t settings[SETTING_COUNT];
 	uint16_t fxsettings[FXSETTING_COUNT];
@@ -177,8 +179,10 @@ static void state_init(State *state, uint32_t sample_rate, uint16_t fps, uint32_
 	save->tick_length = 1000000;
 	memcpy(save->settings, default_settings, sizeof(uint16_t) * SETTING_COUNT);
 	memcpy(save->fxsettings, default_fxsettings, sizeof(uint16_t) * FXSETTING_COUNT);
-	memset(save->r, 0, sizeof(uint32_t) * 64);
-	memset(state->call_stack, 0, sizeof(uint64_t) * CALL_STACK_MAX);
+	memset(save->r, 0, sizeof save->r);
+	memset(save->phases, 0, sizeof save->phases);
+	memset(save->lfo_phis, 0, sizeof save->lfo_phis);
+	memset(state->call_stack, 0, sizeof state->call_stack);
 }
 
 static void state_destroy(State *state)
@@ -331,17 +335,45 @@ static double osc(State *state, double t)
 	};
 }
 
+// ∫₀ᵗexp(pitch_slide ⬝ x)(1 + lfo_amp * sin(lfo_omega ⬝ x + lfo_phi))dx
+static double phase_integral(double t, double pitch_slide, double lfo_amp, double lfo_omega, double lfo_phi)
+{
+	double p = pitch_slide == 0.0 ? t : expm1(pitch_slide * t) / pitch_slide;
+	if (lfo_amp != 0.0)
+	{
+		double den = lfo_omega*lfo_omega + pitch_slide*pitch_slide;
+		if (den == 0.0) p += t * lfo_amp * sin(lfo_phi);
+		else
+		{
+			double wp = exp(pitch_slide * t) * cos(lfo_omega * t + lfo_phi) - cos(lfo_phi);
+			double lp = exp(pitch_slide * t) * sin(lfo_omega * t + lfo_phi) - sin(lfo_phi);
+			p += lfo_amp / den * (-lfo_omega * wp + pitch_slide * lp);
+		}
+	}
+	return p;
+}
+
 static IndexPair render_note(State *state, int8_t note, uint64_t ticks)
 {
 	Save *save = curr_save(state);
 	double fnote = (double)note + (1.0 / 65536.0) * (int16_t)save->settings[SETTING_PITCH_BEND];
 	double base_freq   = 440.0 * pow(2.0, fnote / 12.0);
 	double start_phase = (1.0 / 65536.0) * save->settings[SETTING_START_PHASE];
-	double lfo_omega = (M_PI / 128.0) * save->settings[SETTING_LFO_FREQ];
-	double lfo_amp   = (1.0 / 65536.0) * save->settings[SETTING_LFO_AMP];
-	double lfo_phase = (M_PI / 32768.0) * save->settings[SETTING_LFO_PHASE];
+	double lfo_omega     = (M_PI / 128.0) * save->settings[SETTING_LFO_FREQ];
+	double lfo_amp       = (1.0 / 65536.0) * save->settings[SETTING_LFO_AMP];
+	double start_lfo_phi = (M_PI / 32768.0) * save->settings[SETTING_LFO_PHASE];
 	double pitch_slide = (log(2.0) / 1200.0) * (int16_t)save->settings[SETTING_PITCH_SLIDE];
 	float instr_amp = (1.0f / 256.0f) * save->settings[SETTING_INSTRUMENT_VOL];
+	double saved_phase = 0.0, saved_lfo_phi = 0.0;
+	if (save->settings[SETTING_SAVE_PHASE] != 0)
+	{
+		uint16_t val = save->settings[SETTING_SAVE_PHASE];
+		saved_lfo_phi = save->lfo_phis[(val - 1) / 13107];
+		saved_phase = save->phases[(val - 1) / 13107];
+		saved_phase += (1.0 / 13107.0) * ((val - 1) % 13107);
+	}
+	double phase = start_phase + saved_phase;
+	double lfo_phi = start_lfo_phi + saved_lfo_phi;
 
 	int64_t start_time   = save->current_us;
 	int64_t sustain_time = start_time + save->tick_length * ticks;
@@ -379,20 +411,29 @@ static IndexPair render_note(State *state, int8_t note, uint64_t ticks)
 			a = adsr_amp = amp * (i - start_sample) / (attack_sample - start_sample);
 		}
 		double t = (double)(i - start_sample) / state->sample_rate;
-		double p = pitch_slide == 0.0 ? t : expm1(pitch_slide * t) / pitch_slide;
-		if (lfo_amp != 0.0)
-		{
-			double den = lfo_omega*lfo_omega + pitch_slide*pitch_slide;
-			if (den == 0.0) p += t * lfo_amp * sin(lfo_phase);
-			else
-			{
-				double wp = exp(pitch_slide * t) * cos(lfo_omega * t + lfo_phase) - cos(lfo_phase);
-				double lp = exp(pitch_slide * t) * sin(lfo_omega * t + lfo_phase) - sin(lfo_phase);
-				p += lfo_amp / den * (-lfo_omega * wp + pitch_slide * lp);
-			}
-		}
-		vector_at(samples, i) += a * instr_amp * osc(state, my_fma(base_freq, p, start_phase));
+		double p = phase_integral(t, pitch_slide, lfo_amp, lfo_omega, lfo_phi);
+		vector_at(samples, i) += a * instr_amp * osc(state, my_fma(base_freq, p, phase));
 	}
+	double release_t = 1.0e-6 * (release_time - start_time);
+	double sustain_t = 1.0e-6 * (sustain_time - start_time);
+	double attack_t  = 1.0e-6 * (attack_time  - start_time);
+	double decay_t   = 1.0e-6 * (decay_time   - start_time);
+	if (attack_t > sustain_t) attack_t = sustain_t;
+	if (decay_t  > sustain_t) decay_t  = sustain_t;
+	double attack_p  = phase_integral(attack_t,  pitch_slide, lfo_amp, lfo_omega, lfo_phi);
+	double decay_p   = phase_integral(decay_t,   pitch_slide, lfo_amp, lfo_omega, lfo_phi);
+	double sustain_p = phase_integral(sustain_t, pitch_slide, lfo_amp, lfo_omega, lfo_phi);
+	double release_p = phase_integral(release_t, pitch_slide, lfo_amp, lfo_omega, lfo_phi);
+	save->phases[0] = saved_phase;
+	save->phases[1] = my_fma(base_freq, attack_p,  saved_phase);
+	save->phases[2] = my_fma(base_freq, decay_p,   saved_phase);
+	save->phases[3] = my_fma(base_freq, sustain_p, saved_phase);
+	save->phases[4] = my_fma(base_freq, release_p, saved_phase);
+	save->lfo_phis[0] = saved_lfo_phi;
+	save->lfo_phis[1] = my_fma(lfo_omega, attack_t,  saved_lfo_phi);
+	save->lfo_phis[2] = my_fma(lfo_omega, decay_t,   saved_lfo_phi);
+	save->lfo_phis[3] = my_fma(lfo_omega, sustain_t, saved_lfo_phi);
+	save->lfo_phis[4] = my_fma(lfo_omega, release_t, saved_lfo_phi);
 	return range;
 }
 

@@ -91,6 +91,15 @@ static int cmd_03(char *s, int n, const Editor *editor, const uint8_t *c)
 		if (cut == 0) return snprintf(s, n, "change filtered white noise to low-pass only");
 		return snprintf(s, n, "change filtered white noise high/low to %.5f", (1.0f / 65536.0f) * cut);
 	}
+	case 17:
+	{
+		uint16_t val = get_u16(c, 2);
+		if (val == 0) return snprintf(s, n, "change phase saving to reset");
+		const char *phase_types[5] = { "attack", "attack-decay", "decay-sustain", "sustain-release", "release" };
+		uint8_t type = (val - 1) / 13107;
+		uint16_t off = (val - 1) % 13107;
+		return snprintf(s, n, "change phase saving to %s%+.2f degrees", phase_types[type], (360.0f / 13107.0f) * off);
+	}
 	default: return snprintf(s, n, "change setting 0x%02X to 0x%04X", get_u8(c, 1), get_u16(c, 2));
 	}
 }
