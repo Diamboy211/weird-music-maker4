@@ -72,6 +72,10 @@ enum FXSetting
 	FXSETTING_EXP_FADE_END_AMP,
 	FXSETTING_AMP_AMP,
 	FXSETTING_CLIP_AMP,
+	FXSETTING_BQ_START_NOTE,
+	FXSETTING_BQ_END_NOTE,
+	FXSETTING_BQ_STEP,
+	FXSETTING_BQ_Q,
 	FXSETTING_COUNT
 };
 
@@ -172,7 +176,7 @@ static void state_init(State *state, uint32_t sample_rate, uint16_t fps, uint32_
 		0, 0, 65535, 0, 65535, 0, 0, 0, 256, 0, 0, 32768, 0, 0, 0, 0, 0, 0
 	};
 	static const uint16_t default_fxsettings[FXSETTING_COUNT] = {
-		4096, 4096, 4096, 4096, 4096, 4096
+		4096, 4096, 4096, 4096, 4096, 4096, 0, 0, 10, 0
 	};
 	Save *save = state->save_stack;
 	save->current_us  = 0;
@@ -552,6 +556,22 @@ static void discard(State *state, uint16_t tracks)
 	state->track_stack_ptr -= tracks;
 }
 
+static void duplicate_push(State *state, uint64_t ticks)
+{
+	Save *save = curr_save(state);
+	int64_t start_time = save->current_us;
+	int64_t end_time   = start_time + save->tick_length * ticks;
+	int64_t start_sample = start_time * state->sample_rate / 1000000;
+	int64_t end_sample   =   end_time * state->sample_rate / 1000000;
+	vector_f *src  = state->sample_stack + state->track_stack_ptr;
+	vector_f *dest = state->sample_stack + state->track_stack_ptr + 1;
+	IndexPair range_dest = vector_f_ensure(dest, (IndexPair){ start_sample, end_sample });
+	IndexPair range_src  = vector_f_ensure(src, range_dest);
+	for (int64_t i = range_src.begin; i < range_src.end; i++)
+		vector_at(dest, i) = vector_at(src, i);
+	state->track_stack_ptr++;
+}
+
 static IndexPair mark_frames(State *state, IndexPair range, uint32_t key, RGB color, int8_t note)
 {
 	if (range.begin >= range.end) return (IndexPair){ 0, 0 };
@@ -918,6 +938,19 @@ static enum StepError state_step(State *state, const uint8_t *prog, uint64_t pro
 			state->save_stack_ptr--;
 			state->ip++;
 			return STEP_SUCCESS;
+		case 2:
+			if (state->track_stack_ptr + 1 >= TRACK_STACK_MAX) return STEP_EOF;
+			duplicate_push(state, val);
+			state->ip++;
+			return STEP_SUCCESS;
+		case 3:
+		{
+			if (val > state->track_stack_ptr) return STEP_EOF;
+			vector_f *curr = state->sample_stack + state->track_stack_ptr;
+			vector_f_swap(curr, curr - val);
+			state->ip++;
+			return STEP_SUCCESS;
+		}
 		default:
 			state->ip++;
 			return STEP_SUCCESS;

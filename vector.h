@@ -47,6 +47,12 @@ typedef struct
 		_v->_begin = _v->_end = _v->left_cap; \
 		_v->_data = NULL; \
 	} \
+	void _name##_swap(_name *_v1, _name *_v2) \
+	{ \
+		_name _v = *_v1; \
+		*_v1 = *_v2; \
+		*_v2 = _v; \
+	} \
 	IndexPair _name##_ensure(_name *_v, IndexPair _range) \
 	{ \
 		if (_range.begin < _v->left_cap) _range.begin = _v->left_cap; \

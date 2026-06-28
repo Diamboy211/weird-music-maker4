@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <inttypes.h>
+#include <math.h>
 #include "helper.h"
 #include "instr.h"
 
@@ -11,7 +12,8 @@ static const char *instrument_names[] = {
 };
 static const int instrument_amt = sizeof(instrument_names) / sizeof(*instrument_names);
 static const char *fx_names[] = {
-	"linear fade", "exponential fade", "amplify", "clip"
+	"linear fade", "exponential fade", "amplify", "clip",
+	"biquad low pass", "biquad high pass", "biquad band pass"
 };
 static const int fx_amt = sizeof(fx_names) / sizeof(*fx_names);
 
@@ -123,6 +125,26 @@ static int cmd_05(char *s, int n, const Editor *editor, const uint8_t *c)
 	case 3: return snprintf(s, n, "change exponential fade end amplitude to %.4f", (1.0f / 4096.0f) * get_u16(c, 2));
 	case 4: return snprintf(s, n, "change amplify amplitude to %.4f", (1.0f / 4096.0f) * get_u16(c, 2));
 	case 5: return snprintf(s, n, "change clip amplitude to %.4f", (1.0f / 4096.0f) * get_u16(c, 2));
+	case 6:
+	{
+		char buf[6];
+		get_note(buf, editor, get_s8(c, 2));
+		int8_t fine = get_s8(c, 3);
+		return snprintf(s, n, "change biquad start note to %s%+.1f cents", buf, (100.0f / 256.0f) * fine);
+	}
+	case 7:
+	{
+		char buf[6];
+		get_note(buf, editor, get_s8(c, 2));
+		int8_t fine = get_s8(c, 3);
+		return snprintf(s, n, "change biquad end note to %s%+.1f cents", buf, (100.0f / 256.0f) * fine);
+	}
+	case 8: return snprintf(s, n, "change biquad frequency step to %+" PRId16 " cents", get_s16(c, 2));
+	case 9:
+	{
+		float Q = powf(2.0f, (1.0f / 4096.0f) * get_s16(c, 2));
+		return snprintf(s, n, "change biquad Q to %.4e", Q);
+	}
 	default: return snprintf(s, n, "change fx setting 0x%02X to 0x%04X", get_u8(c, 1), get_u16(c, 2));
 	}
 }
@@ -338,6 +360,18 @@ static int cmd_20(char *s, int n, const Editor *editor, const uint8_t *c)
 	case 1:
 		if (val == 0) return snprintf(s, n, "push all settings");
 		return snprintf(s, n, "pop all settings");
+	case 2: return snprintf(s, n, "duplicate %" PRIu16 " %s and push track", val, val == 1 ? "tick" : "ticks");
+	case 3:
+	{
+		if (val == 0) return snprintf(s, n, "exchange with current track (nop)");
+		if (val == 1) return snprintf(s, n, "exchange with last track");
+		const char *ord = "th";
+		int m100 = val % 100, m10 = m100 % 10, ten = m100 / 10;
+		if (m10 == 1 && ten != 1) ord = "st";
+		if (m10 == 2 && ten != 1) ord = "nd";
+		if (m10 == 3 && ten != 1) ord = "rd";
+		return snprintf(s, n, "exchange with %" PRIu16 "%s last track", val, ord);
+	}
 	default: return snprintf(s, n, "unknown stack operation");
 	}
 }
