@@ -169,7 +169,7 @@ static void state_init(State *state, uint32_t sample_rate, uint16_t fps, uint32_
 		state->frame_stack[i]  = vector_frame_create(-(int64_t)preroll_max * fps, (int64_t)time_max * fps);
 	}
 	static const uint16_t default_settings[SETTING_COUNT] = {
-		0, 0, 65535, 0, 65535, 0, 0, 0, 256, 0, 0, 32768, 0, 0, 0, 0, 0
+		0, 0, 65535, 0, 65535, 0, 0, 0, 256, 0, 0, 32768, 0, 0, 0, 0, 0, 0
 	};
 	static const uint16_t default_fxsettings[FXSETTING_COUNT] = {
 		4096, 4096, 4096, 4096, 4096, 4096
