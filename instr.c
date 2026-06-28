@@ -329,8 +329,12 @@ static int cmd_20(char *s, int n, const Editor *editor, const uint8_t *c)
 	switch (op)
 	{
 	case 0:
+	{
 		if (val == 0) return snprintf(s, n, "push track");
-		return snprintf(s, n, "mix down %" PRIu16 " %s", val, val == 1 ? "track" : "tracks");
+		int is_discard;
+		if ((is_discard = val >= 0x8000)) val = -val;
+		return snprintf(s, n, "%s %" PRIu16 " %s", is_discard ? "discard" : "mix down", val, val == 1 ? "track" : "tracks");
+	}
 	case 1:
 		if (val == 0) return snprintf(s, n, "push all settings");
 		return snprintf(s, n, "pop all settings");

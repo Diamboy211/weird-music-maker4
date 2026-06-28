@@ -533,6 +533,25 @@ static void mix_down(State *state, uint16_t tracks)
 	state->track_stack_ptr -= tracks;
 }
 
+static void discard(State *state, uint16_t tracks)
+{
+	vector_f *samples_dest = state->sample_stack + (state->track_stack_ptr - tracks);
+	for (uint16_t i = 1; i <= tracks; i++)
+	{
+		vector_f *samples_src = samples_dest + i;
+		vector_f_clear(samples_src);
+	}
+	vector_frame *frames_dest = state->frame_stack + (state->track_stack_ptr - tracks);
+	for (uint16_t i = 1; i <= tracks; i++)
+	{
+		vector_frame *frames_src = frames_dest + i;
+		for (int64_t j = frames_src->begin; j < frames_src->end; j++)
+			simple_vector_fi_destroy(&vector_at(frames_src, j).instr);
+		vector_frame_clear(frames_src);
+	}
+	state->track_stack_ptr -= tracks;
+}
+
 static IndexPair mark_frames(State *state, IndexPair range, uint32_t key, RGB color, int8_t note)
 {
 	if (range.begin >= range.end) return (IndexPair){ 0, 0 };
@@ -879,8 +898,11 @@ static enum StepError state_step(State *state, const uint8_t *prog, uint64_t pro
 				state->ip++;
 				return STEP_SUCCESS;
 			}
+			int is_discard;
+			if ((is_discard = val >= 0x8000)) val = -val;
 			if (val > state->track_stack_ptr) return STEP_EOF;
-			mix_down(state, val);
+			if (is_discard) discard(state, val);
+			else mix_down(state, val);
 			state->ip++;
 			return STEP_SUCCESS;
 		case 1:
