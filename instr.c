@@ -13,7 +13,8 @@ static const char *instrument_names[] = {
 static const int instrument_amt = sizeof(instrument_names) / sizeof(*instrument_names);
 static const char *fx_names[] = {
 	"linear fade", "exponential fade", "amplify", "clip",
-	"biquad low pass", "biquad high pass", "biquad band pass"
+	"biquad low pass", "biquad high pass", "biquad band pass",
+	"biquad zero-phase low pass", "biquad zero-phase high pass", "biquad zero-phase band pass"
 };
 static const int fx_amt = sizeof(fx_names) / sizeof(*fx_names);
 
@@ -128,15 +129,15 @@ static int cmd_05(char *s, int n, const Editor *editor, const uint8_t *c)
 	case 6:
 	{
 		char buf[6];
-		get_note(buf, editor, get_s8(c, 2));
-		int8_t fine = get_s8(c, 3);
+		get_note(buf, editor, get_s8(c, 3));
+		int8_t fine = get_s8(c, 2);
 		return snprintf(s, n, "change biquad start note to %s%+.1f cents", buf, (100.0f / 256.0f) * fine);
 	}
 	case 7:
 	{
 		char buf[6];
-		get_note(buf, editor, get_s8(c, 2));
-		int8_t fine = get_s8(c, 3);
+		get_note(buf, editor, get_s8(c, 3));
+		int8_t fine = get_s8(c, 2);
 		return snprintf(s, n, "change biquad end note to %s%+.1f cents", buf, (100.0f / 256.0f) * fine);
 	}
 	case 8: return snprintf(s, n, "change biquad frequency step to %+" PRId16 " cents", get_s16(c, 2));

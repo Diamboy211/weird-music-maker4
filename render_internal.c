@@ -85,6 +85,12 @@ enum FX
 	FX_EXP_FADE,
 	FX_AMP,
 	FX_CLIP,
+	FX_BQ_LOW,
+	FX_BQ_HIGH,
+	FX_BQ_BAND,
+	FX_BQFF_LOW,
+	FX_BQFF_HIGH,
+	FX_BQFF_BAND,
 	FX_COUNT
 };
 
@@ -441,6 +447,66 @@ static IndexPair render_note(State *state, int8_t note, uint64_t ticks)
 	return range;
 }
 
+typedef struct
+{
+	float a0, a1, a2, b0, b1, b2;
+	float x1, x2, y1, y2;
+} BQState;
+
+static inline void bq_reset(BQState *bqs)
+{
+	memset(bqs, 0, sizeof *bqs);
+}
+
+// https://webaudio.github.io/Audio-EQ-Cookbook/Audio-EQ-Cookbook.txt
+static inline void bq_get(BQState *bqs, uint8_t fx, float w0, float Q)
+{
+	float cw = cosf(w0);
+	float sw = sinf(w0);
+	float al = sw / (Q+Q);
+	switch (fx)
+	{
+	case FX_BQ_LOW:
+	case FX_BQFF_LOW:
+		bqs->b0 = (1.0f - cw) * 0.5f;
+		bqs->b1 = 1.0f - cw;
+		bqs->b2 = (1.0f - cw) * 0.5f;
+		bqs->a0 = 1.0f + al;
+		bqs->a1 = -2.0f * cw;
+		bqs->a2 = 1.0f - al;
+		return;
+	case FX_BQ_HIGH:
+	case FX_BQFF_HIGH:
+		bqs->b0 = (1.0f + cw) * 0.5f;
+		bqs->b1 = -(1.0f + cw);
+		bqs->b2 = (1.0f + cw) * 0.5f;
+		bqs->a0 = 1.0f + al;
+		bqs->a1 = -2.0f * cw;
+		bqs->a2 = 1.0f - al;
+		return;
+	case FX_BQ_BAND:
+	case FX_BQFF_BAND:
+		bqs->b0 = al;
+		bqs->b1 = 0;
+		bqs->b2 = -al;
+		bqs->a0 = 1.0f + al;
+		bqs->a1 = -2.0f * cw;
+		bqs->a2 = 1.0f - al;
+		return;
+	}
+}
+
+static inline float bq_next(BQState *bqs, float x0)
+{
+	float y0 = (bqs->b0 * x0 + bqs->b1 * bqs->x1 + bqs->b2 * bqs->x2
+		- bqs->a1 * bqs->y1 - bqs->a2 * bqs->y2) / bqs->a0;
+	bqs->x2 = bqs->x1;
+	bqs->x1 = x0;
+	bqs->y2 = bqs->y1;
+	bqs->y1 = y0;
+	return y0;
+}
+
 static IndexPair apply_fx(State *state, uint8_t fx, uint64_t ticks)
 {
 	Save *save = curr_save(state);
@@ -497,6 +563,62 @@ static IndexPair apply_fx(State *state, uint8_t fx, uint64_t ticks)
 			if (s > amp) s = amp;
 			if (s < -amp) s = -amp;
 			vector_at(samples, i) = s;
+		}
+		return range;
+	}
+	case FX_BQ_LOW:
+	case FX_BQ_HIGH:
+	case FX_BQ_BAND:
+	case FX_BQFF_LOW:
+	case FX_BQFF_HIGH:
+	case FX_BQFF_BAND:
+	{
+		int16_t note_start = save->fxsettings[FXSETTING_BQ_START_NOTE];
+		int16_t note_end   = save->fxsettings[FXSETTING_BQ_END_NOTE];
+		double omega = M_PI * 880.0 / state->sample_rate * pow(2.0, (1.0 / 3072.0) * note_start);
+		int dnote = (int)note_end - (int)note_start;
+		int adnote = dnote;
+		if (adnote < 0) adnote = -adnote;
+		uint16_t step_cent = save->fxsettings[FXSETTING_BQ_STEP];
+		float step_size = 1.0f;
+		if (step_cent > 0)
+			step_size = (128.0f / 100.0f) * (end_sample - start_sample) / adnote * step_cent;
+		step_size = fmaxf(step_size, 1.0f);
+		float Q = powf(2.0f, (1.0f / 4096.0f) * (int16_t)save->fxsettings[FXSETTING_BQ_Q]);
+		double omega_mult = powf(2.0f, (1.0f / 3072.0f) * dnote * step_size / (end_sample - start_sample));
+		BQState bqs;
+		bq_reset(&bqs);
+		int64_t steps = 0;
+		IndexPair range = vector_f_ensure(samples, (IndexPair){ start_sample, end_sample });
+		for (int64_t i = range.begin; i < range.end; i++)
+		{
+			int64_t t = i - start_sample;
+			int recomp = 0;
+			double pomega;
+			while (t >= step_size * steps)
+			{
+				recomp = 1;
+				steps++;
+				pomega = omega;
+				omega *= omega_mult;
+			}
+			if (recomp) bq_get(&bqs, fx, pomega, Q);
+			vector_at(samples, i) = bq_next(&bqs, vector_at(samples, i));
+		}
+		if (fx != FX_BQFF_LOW && fx != FX_BQFF_HIGH && fx != FX_BQFF_BAND)
+			return range;
+		for (int64_t i = range.end - 1; i >= range.begin; i--)
+		{
+			int64_t t = i - start_sample;
+			int recomp = 0;
+			while (t < step_size * steps)
+			{
+				recomp = 1;
+				steps--;
+				omega /= omega_mult;
+			}
+			if (recomp) bq_get(&bqs, fx, omega, Q);
+			vector_at(samples, i) = bq_next(&bqs, vector_at(samples, i));
 		}
 		return range;
 	}
