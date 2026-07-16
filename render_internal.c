@@ -602,7 +602,7 @@ static IndexPair apply_fx(State *state, uint8_t fx, uint64_t ticks)
 				pomega = omega;
 				omega *= omega_mult;
 			}
-			if (recomp) bq_get(&bqs, fx, pomega, Q);
+			if (recomp) bq_get(&bqs, fx, fmin(pomega, M_PI * 0.9), Q);
 			vector_at(samples, i) = bq_next(&bqs, vector_at(samples, i));
 		}
 		if (fx != FX_BQFF_LOW && fx != FX_BQFF_HIGH && fx != FX_BQFF_BAND)
@@ -617,7 +617,7 @@ static IndexPair apply_fx(State *state, uint8_t fx, uint64_t ticks)
 				steps--;
 				omega /= omega_mult;
 			}
-			if (recomp) bq_get(&bqs, fx, omega, Q);
+			if (recomp) bq_get(&bqs, fx, fmin(omega, M_PI * 0.9), Q);
 			vector_at(samples, i) = bq_next(&bqs, vector_at(samples, i));
 		}
 		return range;

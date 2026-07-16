@@ -140,7 +140,12 @@ static int cmd_05(char *s, int n, const Editor *editor, const uint8_t *c)
 		int8_t fine = get_s8(c, 2);
 		return snprintf(s, n, "change biquad end note to %s%+.1f cents", buf, (100.0f / 256.0f) * fine);
 	}
-	case 8: return snprintf(s, n, "change biquad frequency step to %+" PRId16 " cents", get_s16(c, 2));
+	case 8:
+	{
+		uint16_t cents = get_u16(c, 2);
+		if (cents == 0) return snprintf(s, n, "change biquad update rate to per-sample");
+		return snprintf(s, n, "change biquad frequency step to %" PRIu16 " %s", cents, cents != 1 ? "cents" : "cent");
+	}
 	case 9:
 	{
 		float Q = powf(2.0f, (1.0f / 4096.0f) * get_s16(c, 2));
